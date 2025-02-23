@@ -1,4 +1,5 @@
 import time
+import os
 
 import diffrax
 import equinox as eqx
@@ -15,7 +16,6 @@ import functools as ft
 import numpy as np
 from matplotlib.lines import Line2D
 import sys
-import os
 from jaxopt import OSQP
 import matplotlib.animation as animation
 
@@ -202,7 +202,10 @@ def train(
     plot=True,
     print_every=100,
     save_every=1000,
-):
+):    
+    # Create directory for model if it doesn't exist
+    os.makedirs(os.path.dirname(model_path), exist_ok=True)
+    
     key = jrandom.PRNGKey(seed)
     data_key, model_key, loader_key = jrandom.split(key, 3)
 
@@ -341,7 +344,7 @@ def main(model_path, train_model=True, plot_field=True, test_trajectory=True, wi
         )
 
 if __name__ == "__main__":
-    width_size = 64
-    depth = 1
+    width_size = 256
+    depth = 5
     model_path = f"models/mlp_width{width_size}_depth{depth}.eqx"
-    main(model_path, train_model=False, plot_field=False, test_trajectory=True, width_size=width_size, depth=depth)
+    main(model_path, train_model=True, plot_field=True, test_trajectory=True, width_size=width_size, depth=depth)
