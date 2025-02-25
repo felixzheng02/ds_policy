@@ -244,6 +244,7 @@ def load_data(input_opt, show_plot=False, separate=False, shift=True):
         # Plot processed post-grasp trajectories
         if show_plot:
             visualize_trajectories(x_pre_processed, 'Pre-grasp')
+            visualize_trajectories(x_post_processed, 'Post-grasp')
         # Select which trajectory set to return based on flag
         use_post = False  # Flag to toggle between pre/post trajectories
         if use_post:
@@ -335,6 +336,7 @@ def _pre_process(x, x_dot, reverse=False, separate=False, shift=True):
     -----
         M can vary and need not be same between trajectories when separate=False
         When separate=True, trajectories will be padded to the same length using the last position and zero velocity
+        TODO: trajectories are padded to the same length using the last position and zero velocity
     """
 
     L = len(x)

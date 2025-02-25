@@ -10,9 +10,9 @@ import matplotlib.animation as animation
 import os
 import sys
 
-# Add the root directory to Python path
-root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-sys.path.append(root_dir)
+# # Add the root directory to Python path
+# root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+# sys.path.append(root_dir)
 
 from load_tools import load_data
 from node_clf import Func_rot, NeuralODE_rot
@@ -153,9 +153,14 @@ def follow_trajectory(model_path, x, number_of_trajectories=10, dt=0.01, n_steps
                     num_trajs, points_per_traj, _ = target_trajs.shape
                     
                     backtrack_steps = min(backtrack_steps, len(velocity_history))
-                    current_state, actual_traj, velocity_history, recovered_traj_idx, i = recover_from_collision(
-                        current_state, actual_traj, recovered_traj_idx, velocity_history, backtrack_steps, dt, i
+                    current_state, actual_traj, velocity_history, recovered_traj_idx, target_indices, i = recover_from_collision(
+                        current_state, actual_traj, recovered_traj_idx, velocity_history, backtrack_steps, dt, i, target_indices, num_trajs
                     )
+                    if not switch:
+                        # Find closest point across all trajectories
+                        distances = jnp.linalg.norm(flattened_trajs - current_state, axis=1)
+                        closest_flat_idx = jnp.argmin(distances)
+                        fixed_target_idx = closest_flat_idx // points_per_traj
             
             if switch:
                 # Find closest point across all trajectories
@@ -275,7 +280,7 @@ def check_obstacle_collision(state, obstacle):
     # Check which points are inside the obstacle (distance < radius)
     return distance < radius
 
-def recover_from_collision(current_state, actual_traj, recovered_traj_idx,velocity_history, backtrack_steps, dt, i):
+def recover_from_collision(current_state, actual_traj, recovered_traj_idx, velocity_history, backtrack_steps, dt, i, target_indices, num_trajs):
     """
     Recover from a collision by reverting to a previous state and clearing recent velocity history.
     TODO: this is not adaptive, might need to train a reverse node policy.
@@ -283,20 +288,34 @@ def recover_from_collision(current_state, actual_traj, recovered_traj_idx,veloci
     Args:
         state: Current state of the system
         actual_traj: Actual trajectory
+        recovered_traj_idx: Indices of frames where recovery occurred
         velocity_history: Velocity history
         backtrack_steps: Number of steps to backtrack
+        dt: Time step
+        i: Current time step
+        target_indices: List tracking which target trajectory is being followed
+        num_trajs: Total number of trajectories
     
     Returns:
         state: Recovered state
         actual_traj: Recovered trajectory
+        velocity_history: Updated velocity history
+        recovered_traj_idx: Updated recovery indices
+        target_indices: Updated target indices
+        i: Updated time step
     """
+    # Use num_trajs + 1 as a special index to indicate recovery trajectory
+    # This index doesn't correspond to any real trajectory
+    special_recovery_idx = num_trajs
+    
     for j in range(backtrack_steps):
         current_state = current_state - dt * velocity_history.pop()
         actual_traj.append(current_state)
         recovered_traj_idx.append(i)
+        target_indices.append(special_recovery_idx)  # Add special index
         i += 1
         
-    return current_state, actual_traj, velocity_history, recovered_traj_idx, i
+    return current_state, actual_traj, velocity_history, recovered_traj_idx, target_indices, i
 
 def visualize_follow_trajectory(trajectories_path="trajectories.npz", output_path='trajectory_animation.mp4', obstacle=None):
     """
@@ -335,12 +354,12 @@ def visualize_follow_trajectory(trajectories_path="trajectories.npz", output_pat
     target_lines = []
     for i, traj in enumerate(target_trajs):
         line, = ax.plot3D(traj[:, 0], traj[:, 1], traj[:, 2],
-                         'b-', alpha=0.3, linewidth=1, label='Sample Trajectory' if i == 0 else None)
+                         'b-', alpha=0.05, linewidth=1, label='Sample Trajectory' if i == 0 else None)
         target_lines.append(line)
     
     # Initialize plot elements with dummy points
-    generated_line, = ax.plot3D([], [], [], 'r-', linewidth=2, label='Generated Trajectory')
-    recovered_line, = ax.plot3D([], [], [], 'y-', linewidth=2, label='Recovery Trajectory')
+    generated_line, = ax.plot3D([], [], [], '#3A7D44', linewidth=3, label='Generated Trajectory')
+    recovered_line, = ax.plot3D([], [], [], 'r-', linewidth=2, label='Recovery Trajectory')
     start_point = ax.scatter3D([], [], [], c='red', s=100, label='Start Point')
     followed_line, = ax.plot3D([], [], [], 'g-', linewidth=1, alpha=1.0, label='Target Trajectory')
     
@@ -377,7 +396,7 @@ def visualize_follow_trajectory(trajectories_path="trajectories.npz", output_pat
             followed_line.set_data([], [])
             followed_line.set_3d_properties([])
             for line in target_lines:
-                line.set_alpha(0.3)
+                line.set_alpha(0.05)
                 line.set_color('blue')
             return generated_line, recovered_line, start_point, followed_line, *target_lines
         
@@ -389,57 +408,141 @@ def visualize_follow_trajectory(trajectories_path="trajectories.npz", output_pat
         # Find the first recovery point in the current frame range
         if len(recovered_idx) > 0:
             recovered_idx = np.array(recovered_idx, dtype=np.int32)
-            first_recovery_idx = np.min(recovered_idx[recovered_idx <= frame_in_current_traj]) if any(recovered_idx <= frame_in_current_traj) else frame_in_current_traj + 1
-        else:
-            first_recovery_idx = frame_in_current_traj + 1
+            # Instead of just finding first recovery index, find all recovery segments
+            recovery_mask = np.zeros(frame_in_current_traj + 1, dtype=bool)
+            recovery_indices = recovered_idx[recovered_idx <= frame_in_current_traj]
+            recovery_mask[recovery_indices] = True
             
-        # Split points into normal and recovery trajectories
-        normal_points = current_traj[:min(first_recovery_idx, frame_in_current_traj + 1)]
-        recovery_points = current_traj[first_recovery_idx:frame_in_current_traj + 1] if frame_in_current_traj >= first_recovery_idx else []
+            # Also mark frames as recovery based on the special target index
+            if frame_in_current_traj < len(current_indices):
+                for idx in range(frame_in_current_traj + 1):
+                    if idx < len(current_indices) and current_indices[idx] >= len(target_trajs):
+                        recovery_mask[idx] = True
+        else:
+            recovery_mask = np.zeros(frame_in_current_traj + 1, dtype=bool)
+            # Check for recovery based on special target index even if recovered_idx is empty
+            if frame_in_current_traj < len(current_indices):
+                for idx in range(frame_in_current_traj + 1):
+                    if idx < len(current_indices) and current_indices[idx] >= len(target_trajs):
+                        recovery_mask[idx] = True
         
-        # Update normal trajectory points
-        if len(normal_points) > 0:
+        # Split points into normal and recovery trajectories
+        recovery_segments = []
+        normal_segments = []
+        
+        # Process segments based on recovery mask
+        i = 0
+        while i <= frame_in_current_traj:
+            if recovery_mask[i]:
+                # Start of a recovery segment
+                start = i
+                while i <= frame_in_current_traj and recovery_mask[i]:
+                    i += 1
+                # Add this recovery segment
+                recovery_segments.append(current_traj[start:i])
+            else:
+                # Start of a normal segment
+                start = i
+                while i <= frame_in_current_traj and not recovery_mask[i]:
+                    i += 1
+                # Add this normal segment
+                normal_segments.append((start, i, current_traj[start:i]))
+        
+        # Determine whether to show normal points or recovery points
+        show_normal = False
+        normal_points = None
+        
+        # If we have recovery segments, only show normal segments that come after the last recovery
+        if recovery_segments and recovery_indices.size > 0:
+            last_recovery_idx = max(recovery_indices)
+            post_recovery_segments = [segment for start, end, segment in normal_segments if start > last_recovery_idx]
+            
+            if post_recovery_segments:
+                # We have normal segments after recovery - show only these
+                normal_points = np.vstack(post_recovery_segments)
+                show_normal = True
+        elif normal_segments:
+            # No recovery segments (or none visible yet) - show all normal segments
+            normal_points = np.vstack([segment for _, _, segment in normal_segments])
+            show_normal = True
+        
+        # Update visualization based on what we're showing
+        if show_normal:
+            # Show normal trajectory
             generated_line.set_data(normal_points[:, 0], normal_points[:, 1])
             generated_line.set_3d_properties(normal_points[:, 2])
             generated_line.set_alpha(1)
+            generated_line.set_color('#3A7D44')
+            
+            # Hide recovery trajectory
+            recovered_line.set_data([], [])
+            recovered_line.set_3d_properties([])
         else:
+            # Hide normal trajectory
             generated_line.set_data([], [])
             generated_line.set_3d_properties([])
             
-        # Update recovered trajectory points
-        if len(recovery_points) > 0:
-            recovered_line.set_data(recovery_points[:, 0], recovery_points[:, 1])
-            recovered_line.set_3d_properties(recovery_points[:, 2])
-            recovered_line.set_alpha(1)
-        else:
-            recovered_line.set_data([], [])
-            recovered_line.set_3d_properties([])
+            # Show recovery trajectory (if any)
+            if recovery_segments:
+                recovery_points = np.vstack(recovery_segments)
+                recovered_line.set_data(recovery_points[:, 0], recovery_points[:, 1])
+                recovered_line.set_3d_properties(recovery_points[:, 2])
+                recovered_line.set_alpha(1)
+            else:
+                recovered_line.set_data([], [])
+                recovered_line.set_3d_properties([])
         
         # Update start point
         start_point._offsets3d = ([current_traj[0, 0]], [current_traj[0, 1]], [current_traj[0, 2]])
         
         # Update target trajectory colors and followed points
-        if frame_in_current_traj < len(current_indices):
+        # Only show target trajectory if we're in normal mode (not recovery)
+        if frame_in_current_traj < len(current_indices) and show_normal:
             current_target = current_indices[frame_in_current_traj]
-            # Update the followed points to match the current target trajectory
-            target_traj = target_trajs[current_target]
-            followed_line.set_data(target_traj[:, 0], target_traj[:, 1])
-            followed_line.set_3d_properties(target_traj[:, 2])
-            followed_line.set_color('green')
-            followed_line.set_alpha(1.0)
             
-            for i, line in enumerate(target_lines):
-                if i == current_target:
-                    line.set_alpha(0.0)  # Hide the original line when being followed
-                elif i in current_frame_removed:
-                    line.set_color('red')  # Show removed trajectories in red
-                    line.set_alpha(0.3)  # Keep same opacity
-                else:
-                    line.set_alpha(0.3)
-                    line.set_color('blue')
+            # Check if this is a recovery index (which equals num_trajectories)
+            if current_target < len(target_trajs):
+                # Update the followed points to match the current target trajectory
+                target_traj = target_trajs[current_target]
+                followed_line.set_data(target_traj[:, 0], target_traj[:, 1])
+                followed_line.set_3d_properties(target_traj[:, 2])
+                followed_line.set_color('#3A7D44')
+                followed_line.set_alpha(1.0)
+                
+                # Update target trajectory line colors
+                for i, line in enumerate(target_lines):
+                    if i == current_target:
+                        line.set_alpha(0.05)  # Hide the original line when being followed
+                    elif i in current_frame_removed:
+                        line.set_color('red')  # Show removed trajectories in red
+                        line.set_alpha(0.05)  # Keep same opacity
+                    else:
+                        line.set_alpha(0.05)
+                        line.set_color('blue')
+            else:
+                # This is a recovery trajectory, don't highlight any target trajectory
+                followed_line.set_data([], [])
+                followed_line.set_3d_properties([])
+                
+                # Reset all target lines to default appearance during recovery
+                for i, line in enumerate(target_lines):
+                    if i in current_frame_removed:
+                        line.set_color('red')  # Show removed trajectories in red
+                    else:
+                        line.set_color('blue')
+                    line.set_alpha(0.05)  # Keep all lines at low opacity
         else:
+            # We're in recovery mode or past the end of indices, don't show any followed trajectory
             followed_line.set_data([], [])
             followed_line.set_3d_properties([])
+            
+            # Reset all target lines to default appearance during recovery
+            for i, line in enumerate(target_lines):
+                if i in current_frame_removed:
+                    line.set_color('red')  # Show removed trajectories in red
+                else:
+                    line.set_color('blue')
+                line.set_alpha(0.05)  # Keep all lines at low opacity
         
         return generated_line, recovered_line, start_point, followed_line, *target_lines
     
@@ -495,11 +598,11 @@ if __name__ == "__main__":
         follow_trajectory(
             model_path=model_path,
         x=x,
-        number_of_trajectories=2,
+        number_of_trajectories=1,
         dt=0.01,
         n_steps=500,
         save_path="data/trajectories.npz",
-        switch=True,
+        switch=False,
         obstacle=obstacle,
         backtrack_steps=30
     )
