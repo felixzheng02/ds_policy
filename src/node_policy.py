@@ -8,6 +8,14 @@ import jax.numpy as jnp
 import numpy as np
 from jaxopt import OSQP
 
+# Add the quaternion_ds package to sys.path to import it
+sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'se3_lpvds/src/quaternion_ds'))
+
+import json
+from scipy.spatial.transform import Rotation as R
+from se3_lpvds.src.quaternion_ds.src.quat_class import quat_class, compute_ang_vel
+from se3_lpvds.src.quaternion_ds.src.util import quat_tools
+
 
 class NODEPolicy:
     """
@@ -36,9 +44,6 @@ class NODEPolicy:
         if demo_trajs[0].shape[1] == 7:  # quaternion
             self.x_dim = 3
             self.r_dim = 4
-        elif demo_trajs[0].shape[1] == 9:  # rotation matrix
-            self.x_dim = 3
-            self.r_dim = 6
         elif demo_trajs[0].shape[1] == 3:  # position
             self.x_dim = 3
             self.r_dim = 0
@@ -66,6 +71,21 @@ class NODEPolicy:
 
         self.ref_traj_idx = None
         self.ref_point_idx = None
+        
+        # Load quaternion DS model if r_dim is 4 (quaternion)
+        if self.r_dim == 4:
+            self.quat_ds = quat_class(self.demo_trajs[0][:, self.x_dim:self.x_dim+self.r_dim], self.demo_trajs[0][:, self.x_dim:self.x_dim+self.r_dim], R.from_quat(self.demo_trajs[0][0, self.x_dim:self.x_dim+self.r_dim]), self.dt, 4)
+
+    def get_action(self, state):
+        """
+        Args:
+            state: np.ndarray(n_dims)
+        Returns:
+            action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
+        """
+        x_dot = self.get_x_dot(state)
+        r_dot = self.get_r_dot(state)
+        return jnp.concatenate([x_dot, r_dot])
 
     def get_x_dot(self, state, alpha_V=20.0, lookahead=5):
         """
@@ -93,8 +113,18 @@ class NODEPolicy:
         Args:
             state: np.ndarray(n_dims)
         Returns:
-            r_dot: np.ndarray(roll, pitch, yaw)
+            r_dot: np.ndarray(droll, dpitch, dyaw)
         """
+        if self.r_dim == 0:
+            return np.array([])
+        
+        # Extract quaternion from state
+        q_curr = R.from_quat(state[self.x_dim:self.x_dim+self.r_dim])
+        
+        # Compute output using quaternion DS
+        omega = self.quat_ds.step(q_curr, self.dt)
+        
+        return omega
 
     def compute_clf(self, current_state, ref_state, qp, model, alpha_V):
         # Compute tracking error
