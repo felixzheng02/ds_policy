@@ -3,7 +3,6 @@ import sys
 import jax.random as jrandom
 import time
 from node_clf import NeuralODE_rot
-from follow_trajectory import compute_clf
 import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
@@ -40,6 +39,9 @@ class NODEPolicy:
         elif demo_trajs[0].shape[1] == 9:  # rotation matrix
             self.x_dim = 3
             self.r_dim = 6
+        elif demo_trajs[0].shape[1] == 3:  # position
+            self.x_dim = 3
+            self.r_dim = 0
         else:
             raise ValueError(f"Invalid demo trajectory shape: {demo_trajs[0].shape}")
 
@@ -63,6 +65,7 @@ class NODEPolicy:
         self.backtrack_steps = backtrack_steps
 
         self.ref_traj_idx = None
+        self.ref_point_idx = None
 
     def get_x_dot(self, state, alpha_V=20.0, lookahead=5):
         """
@@ -73,12 +76,12 @@ class NODEPolicy:
         Returns:
             x_dot: np.ndarray(dx, dy, dz)
         """
-        if self.ref_traj_idx is None:
-            self.ref_traj_idx, ref_point_idx = self.choose_traj(state)
+        if self.switch:
+            self.ref_traj_idx, self.ref_point_idx = self.choose_traj(state)
         qp = OSQP()
-        x_dot, u_star = compute_clf(
+        x_dot, u_star = self.compute_clf(
             state,
-            self.demo_trajs[self.ref_traj_idx][ref_point_idx],
+            self.demo_trajs[self.ref_traj_idx][self.ref_point_idx],
             qp,
             self.model,
             alpha_V,
@@ -92,31 +95,32 @@ class NODEPolicy:
         Returns:
             r_dot: np.ndarray(roll, pitch, yaw)
         """
-    
-    @staticmethod
-    def compute_clf(current_state, ref_state, qp, model, alpha_V):
+
+    def compute_clf(self, current_state, ref_state, qp, model, alpha_V):
         # Compute tracking error
         error = current_state - ref_state
-        
+
         # CLF (Control Lyapunov Function)
         V = jnp.sum(jnp.square(error)) / 2
-        
+
         # Get nominal dynamics from neural ODE
         f_x = model.func_rot(0, current_state, None)
-        
+
         # Get reference dynamics
         f_xref = model.func_rot(0, ref_state, None)
-        
+
         # Compute CLF derivative terms
         s = jnp.dot(error, f_x - f_xref)
-        
+
         # QP parameters for CLF-based control
         Q_opt = jnp.eye(3)  # Cost on control input
         G_opt = 2 * error.reshape(1, -1)  # CLF derivative terms
         h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
-        
+
         # Solve QP using OSQP
-        sol = qp.run(params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)).params
+        sol = qp.run(
+            params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)
+        ).params
         u_star = sol.primal.reshape(-1)
 
         # Apply control input and integrate dynamics

@@ -22,20 +22,21 @@ from matplotlib.lines import Line2D
 
 class Func_rot(eqx.Module):
     """Neural ODE function for 3D translational dynamics.
-    
+
     This class defines a neural network that learns to predict velocities from positions.
     The model takes in a 3D position vector and outputs 3D velocity.
-    
+
     Structure:
     - Input: 3D state vector [position (3D)]
-    - MLP: Maps state to velocities 
+    - MLP: Maps state to velocities
     - Output: 3D vector field [translational velocity (3D)]
     """
+
     mlp: eqx.nn.MLP  # Neural network to learn the dynamics
 
     def __init__(self, data_size, width_size, depth, *, key, **kwargs):
         """Initialize the model.
-        
+
         Args:
             data_size: Dimension of input state (3 for position)
             width_size: Width of hidden layers
@@ -54,28 +55,32 @@ class Func_rot(eqx.Module):
         )
         # Initialize weights using orthogonal initialization
         model_key = key
-        key_weights = jrandom.split(model_key, depth+1)
+        key_weights = jrandom.split(model_key, depth + 1)
 
-        for i in range(depth+1):
+        for i in range(depth + 1):
             where = lambda m: m.layers[i].weight
             shape = self.mlp.layers[i].weight.shape
-            self.mlp = eqx.tree_at(where, self.mlp, replace=initializer(key_weights[i], shape, dtype=jnp.float32))
+            self.mlp = eqx.tree_at(
+                where,
+                self.mlp,
+                replace=initializer(key_weights[i], shape, dtype=jnp.float32),
+            )
 
     @eqx.filter_jit
     def predict_velocity(self, x):
         """Predict velocity directly from position.
-        
+
         Args:
-            x: Current 3D position(s). Can be a single vector (3,), batch (N, 3), 
+            x: Current 3D position(s). Can be a single vector (3,), batch (N, 3),
                or multiple trajectories (L, M, 3) where L is number of trajectories
                and M is points per trajectory
-            
+
         Returns:
             3D velocity vector(s) with same shape as input
         """
         # Convert to jnp array if not already
         x = jnp.asarray(x)
-        
+
         # Handle different input shapes
         if x.ndim == 1:
             # Single position vector (3,) -> add batch dimension (1, 3)
@@ -96,12 +101,12 @@ class Func_rot(eqx.Module):
     @eqx.filter_jit
     def __call__(self, t, y, args):
         """Compute the vector field at current state (used for ODE solving).
-        
+
         Args:
             t: Current time (not used)
             y: Current 3D position
             args: Additional arguments (not used)
-            
+
         Returns:
             3D velocity vector
         """
@@ -122,6 +127,7 @@ class NeuralODE_rot(eqx.Module):
         depth: Number of hidden layers in Func network
         key: JAX random key for initialization
     """
+
     func_rot: Func_rot
 
     def __init__(self, data_size, width_size, depth, *, key, **kwargs):
@@ -137,11 +143,11 @@ class NeuralODE_rot(eqx.Module):
     def generate_trajectory(self, ts, y0):
         """
         Generate a trajectory by solving the ODE.
-        
+
         Args:
             ts: Time points to evaluate trajectory at
             y0: Initial 3D position
-            
+
         Returns:
             Position trajectory evaluated at specified timepoints
         """
