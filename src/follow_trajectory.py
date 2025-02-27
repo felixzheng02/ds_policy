@@ -10,12 +10,13 @@ import matplotlib.animation as animation
 import os
 import sys
 
-# # Add the root directory to Python path
-# root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
-# sys.path.append(root_dir)
+# Add the root directory to Python path
+root_dir = os.path.abspath(os.path.dirname(__file__))
+sys.path.append(root_dir)
 
 from load_tools import load_data
 from node_clf import Func_rot, NeuralODE_rot
+from node_policy import NODEPolicy
 
 def sphere_obstacle_constraint(state, center, radius, safety_margin=0.1): # TODO: not used for now
     """
@@ -145,7 +146,7 @@ def follow_trajectory(model_path, x, number_of_trajectories=10, dt=0.01, n_steps
         while i < n_steps:
             if obstacle is not None:
                 # collision: bool = check_obstacle_collision(current_state, obstacle)
-                collision = i == 50 # test
+                collision = i == 50 # TODO: test
                 if collision:
                     removed_sample_traj_indices[i] = current_target_idx
                     target_trajs = jnp.delete(target_trajs, current_target_idx, axis=0)
@@ -169,7 +170,7 @@ def follow_trajectory(model_path, x, number_of_trajectories=10, dt=0.01, n_steps
                 current_target_idx = closest_flat_idx // points_per_traj
                 closest_idx = closest_flat_idx % points_per_traj
                 
-            else: # TODO: this is imcompatible with obstacle avoidance
+            else:
                 # Stay with initially closest trajectory
                 current_target_idx = fixed_target_idx
                 # Find closest point only within the fixed trajectory
@@ -187,7 +188,7 @@ def follow_trajectory(model_path, x, number_of_trajectories=10, dt=0.01, n_steps
             next_idx = min(closest_idx + lookahead, points_per_traj - 1)
             ref_next = target_trajs[current_target_idx, next_idx]
             
-            x_dot, u_star = compute_clf(current_state, ref_state, qp, model, alpha_V)
+            x_dot, u_star = NODEPolicy.compute_clf(current_state, ref_state, qp, model, alpha_V)
             velocity_history.append(x_dot)  # Store velocity
             current_state = current_state + dt * x_dot
             
@@ -230,35 +231,6 @@ def follow_trajectory(model_path, x, number_of_trajectories=10, dt=0.01, n_steps
     
     return all_trajectories
 
-def compute_clf(current_state, ref_state, qp, model, alpha_V):
-    # Compute tracking error
-    error = current_state - ref_state
-    
-    # CLF (Control Lyapunov Function)
-    V = jnp.sum(jnp.square(error)) / 2
-    
-    # Get nominal dynamics from neural ODE
-    f_x = model.func_rot(0, current_state, None)
-    
-    # Get reference dynamics
-    f_xref = model.func_rot(0, ref_state, None)
-    
-    # Compute CLF derivative terms
-    s = jnp.dot(error, f_x - f_xref)
-    
-    # QP parameters for CLF-based control
-    Q_opt = jnp.eye(3)  # Cost on control input
-    G_opt = 2 * error.reshape(1, -1)  # CLF derivative terms
-    h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
-    
-    # Solve QP using OSQP
-    sol = qp.run(params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)).params
-    u_star = sol.primal.reshape(-1)
-
-    # Apply control input and integrate dynamics
-    x_dot = f_x + u_star
-
-    return x_dot, u_star
 
 def check_obstacle_collision(state, obstacle):
     """
@@ -578,6 +550,7 @@ def visualize_follow_trajectory(trajectories_path="trajectories.npz", output_pat
     writer = animation.FFMpegWriter(fps=20, bitrate=3000)
     anim.save(output_path, writer=writer)
     plt.close()
+
 
 if __name__ == "__main__":
     

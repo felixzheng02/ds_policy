@@ -344,7 +344,7 @@ def main(model_path, train_model=True, plot_field=True, test_trajectory=True, wi
         )
 
 if __name__ == "__main__":
-    width_size = 256
-    depth = 5
+    width_size = 64
+    depth = 3
     model_path = f"models/mlp_width{width_size}_depth{depth}.eqx"
     main(model_path, train_model=True, plot_field=True, test_trajectory=True, width_size=width_size, depth=depth)
