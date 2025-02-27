@@ -13,11 +13,12 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 import json
 from scipy.spatial.transform import Rotation as R
-from se3_lpvds.src.quaternion_ds.src.quat_class import quat_class, compute_ang_vel
-from se3_lpvds.src.quaternion_ds.src.util import quat_tools
+from se3_lpvds.src.quaternion_ds.src.gmm_class import gmm_class
+from se3_lpvds.src.quaternion_ds.src.quat_class import quat_class
+from se3_lpvds.src.quaternion_ds.src.util.process_tools import pre_process, compute_output, extract_state, rollout_list
 
 
-class NODEPolicy:
+class DSPolicy:
     """
     __init__(model_path: str,
         demo_trajs: List[np.ndarray(n_steps, n_dim=x_dim+r_dim)],
@@ -30,11 +31,12 @@ class NODEPolicy:
     """
 
     def __init__(
-        self, model_path, demo_trajs, dt=0.01, switch=False, backtrack_steps=0, key=None
+        self, pos_model_path, quat_model_path, demo_trajs, dt=0.01, switch=False, backtrack_steps=0, key=None
     ):
         """
         Args:
-            model_path: String of model file path
+            node_model_path: String of NODE model file path
+            quat_model_path: String of quaternion model file path
             demo_trajs: List of demo trajectories [np.ndarray(n_steps, n_dim=x_dim+r_dim)]. Assume n_steps can vary, n_dim is fixed.
             dt: Time step
             switch: If True, allows switching between trajectories at runtime. If False, sticks to initially chosen trajectory.
@@ -50,16 +52,6 @@ class NODEPolicy:
         else:
             raise ValueError(f"Invalid demo trajectory shape: {demo_trajs[0].shape}")
 
-        model_name = os.path.basename(model_path)
-        width_str = model_name.split("width")[1].split("_")[0]
-        depth_str = model_name.split("depth")[1].split(".")[0]
-        width_size = int(width_str)
-        depth = int(depth_str)
-        if key is None:
-            key = jrandom.PRNGKey(int(time.time()))
-        template_model = NeuralODE_rot(self.x_dim, width_size, depth, key=key)
-        self.model = eqx.tree_deserialise_leaves(model_path, template_model)
-
         self.demo_trajs = demo_trajs
         self.demo_trajs_flat = jnp.concatenate([traj for traj in demo_trajs], axis=0)
         self.demo_trajs_segment_idx = np.cumsum(
@@ -71,10 +63,92 @@ class NODEPolicy:
 
         self.ref_traj_idx = None
         self.ref_point_idx = None
+
+        # NODE model
+        model_name = os.path.basename(pos_model_path)
+        width_str = model_name.split("width")[1].split("_")[0]
+        depth_str = model_name.split("depth")[1].split(".")[0]
+        width_size = int(width_str)
+        depth = int(depth_str)
+        if key is None:
+            key = jrandom.PRNGKey(int(time.time()))
+        template_model = NeuralODE_rot(self.x_dim, width_size, depth, key=key)
+        self.pos_model = eqx.tree_deserialise_leaves(pos_model_path, template_model)
         
-        # Load quaternion DS model if r_dim is 4 (quaternion)
-        if self.r_dim == 4:
-            self.quat_ds = quat_class(self.demo_trajs[0][:, self.x_dim:self.x_dim+self.r_dim], self.demo_trajs[0][:, self.x_dim:self.x_dim+self.r_dim], R.from_quat(self.demo_trajs[0][0, self.x_dim:self.x_dim+self.r_dim]), self.dt, 4)
+        # quaternion DS model
+        self.quat_model = self.load_quat_model(quat_model_path, demo_trajs)
+
+    def load_quat_model(self, quat_model_path, demo_trajs):
+        q_in, q_out = self.quad_data_preprocess(demo_trajs)
+
+        with open(quat_model_path, 'r') as f:
+            model_data = json.load(f)
+    
+        # Extract parameters from the loaded data
+        K = model_data.get('K')
+        M = model_data.get('M')
+        dt = model_data.get('dt')
+        assert dt == self.dt
+        q_att_array = np.array(model_data.get('att_ori'))
+        q_att = R.from_quat(q_att_array)
+
+        quat_obj = quat_class(q_in, q_out, q_att, dt, K_init=K)
+
+        Prior = np.array(model_data.get('Prior'))
+        Mu_flat = np.array(model_data.get('Mu'))
+        Sigma_flat = np.array(model_data.get('Sigma'))
+        
+        Mu = Mu_flat.reshape(2*K, 4)
+        Sigma = Sigma_flat.reshape(2*K, 4, 4)
+        
+        Mu_rot = [R.from_quat(mu) for mu in Mu]
+        
+        quat_obj.gmm = gmm_class(q_in, q_att, K)
+        quat_obj.gmm.Prior = Prior
+        quat_obj.gmm.Mu = Mu_rot
+        quat_obj.gmm.Sigma = Sigma
+        
+        A_ori_flat = np.array(model_data.get('A_ori'))
+        quat_obj.A_ori = A_ori_flat.reshape(2*K, 4, 4)
+        
+        quat_obj.K = K
+        quat_obj.dt = dt
+        quat_obj.q_att = q_att
+
+        return quat_obj
+
+    def quad_data_preprocess(self, trajs):
+        p_raw = []  # Position trajectories
+        q_raw = []  # Orientation trajectories
+        t_raw = []  # Time vectors
+        for i, traj in enumerate(trajs):
+            # Verify that the data has the expected format (n, 7)
+            if traj.shape[1] != 7:
+                print(f"Warning: Trajectory {i} has unexpected shape {traj.shape}. Expected (n, 7). Skipping.")
+                continue
+            
+            # Extract positions (first 3 columns) and quaternions (last 4 columns)
+            positions = traj[:, :3]
+            quaternions = traj[:, 3:7]
+            
+            # Create time vector based on dt
+            times = np.arange(0, len(positions) * self.dt, self.dt)[:len(positions)]
+            
+            # Convert quaternions to Rotation objects
+            rotations = [R.from_quat(quat) for quat in quaternions]
+            
+            # Append to raw data lists
+            p_raw.append(positions)
+            q_raw.append(rotations)
+            t_raw.append(times)
+        
+        # Process data
+        p_in, q_in, t_in = pre_process(p_raw, q_raw, t_raw, opt="savgol")
+        p_out, q_out = compute_output(p_in, q_in, t_in)
+        p_init, q_init, p_att, q_att = extract_state(p_in, q_in)
+        p_in, q_in, p_out, q_out = rollout_list(p_in, q_in, p_out, q_out)
+
+        return q_in, q_out
 
     def get_action(self, state):
         """
@@ -122,7 +196,7 @@ class NODEPolicy:
         q_curr = R.from_quat(state[self.x_dim:self.x_dim+self.r_dim])
         
         # Compute output using quaternion DS
-        omega = self.quat_ds.step(q_curr, self.dt)
+        _, _, omega = self.quat_model._step(q_curr, self.dt)
         
         return omega
 

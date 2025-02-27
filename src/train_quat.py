@@ -17,7 +17,7 @@ from src.gmm_class import gmm_class
 from load_tools import load_data
 
 
-def load_quat_model(model_path='models'):
+def load_quat_model(model_path='models/quat_model.json'):
     """
     Load a trained quaternion dynamical system model from JSON files.
     
@@ -32,23 +32,18 @@ def load_quat_model(model_path='models'):
         The loaded quaternion dynamical system model.
     """
     # Load the main model file
-    main_model_path = os.path.join(model_path, '1.json')
-    with open(main_model_path, 'r') as f:
+    with open(model_path, 'r') as f:
         model_data = json.load(f)
-    
-    # Load additional parameters
-    additional_params_path = os.path.join(model_path, 'quat_model_additional_params.json')
-    with open(additional_params_path, 'r') as f:
-        additional_params = json.load(f)
     
     # Extract parameters from the loaded data
     K = model_data.get('K')
-    dt = additional_params.get('dt')
-    q_att_array = np.array(additional_params.get('q_att'))
+    M = model_data.get('M')
+    dt = model_data.get('dt')
+    q_att_array = np.array(model_data.get('att_ori'))
     q_att = R.from_quat(q_att_array)
     
     # Initialize the quat_class with placeholder data
-    quat_obj = quat_class(None, None, q_att, dt, K_init=K)
+    quat_obj = quat_class(None, None, q_att, dt, K_init=K, M=M)
     
     # Now manually set the model parameters from the loaded JSON
     # Reshape GMM parameters
@@ -64,7 +59,7 @@ def load_quat_model(model_path='models'):
     Mu_rot = [R.from_quat(mu) for mu in Mu]
     
     # Set GMM parameters
-    quat_obj.gmm = gmm_class(2*K, 4)
+    quat_obj.gmm = gmm_class(None, q_att, K, M)
     quat_obj.gmm.Prior = Prior
     quat_obj.gmm.Mu = Mu_rot
     quat_obj.gmm.Sigma = Sigma
@@ -141,7 +136,7 @@ def train_quat():
     # plt.show()
     print("Training and evaluation completed successfully.")
     
-    return quat_obj, p_init, q_init, p_att, q_att, dt
+    return quat_obj, p_init, q_init, p_att, q_att, dt, q_in, q_out
 
 
 def test_quat():
@@ -156,7 +151,7 @@ def test_quat():
         - The original trajectory
         - The simulated trajectory from the quaternion dynamical system
     """
-    quat_obj = load_quat_model('models')
+    quat_obj = load_quat_model('models/quat_model.json')
     
     # Get dt and q_att from the loaded model
     dt = quat_obj.dt
@@ -255,5 +250,5 @@ if __name__ == "__main__":
             print(f"Error loading {os.path.basename(file_path)}: {str(e)}")
     
     print(f"Total number of eef_traj files loaded: {len(eef_traj_data)}")
-    train_quat()
-    # test_quat()
+    # train_quat()
+    test_quat()

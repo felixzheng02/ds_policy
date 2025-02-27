@@ -16,7 +16,7 @@ sys.path.append(root_dir)
 
 from load_tools import load_data
 from node_clf import Func_rot, NeuralODE_rot
-from node_policy import NODEPolicy
+from neural_ode.src.ds_policy import DSPolicy
 
 
 def sphere_obstacle_constraint(
@@ -93,7 +93,7 @@ def follow_trajectory(
         obstacle: Dict containing sphere obstacle parameters {center: array, radius: float} or None
         backtrack_steps: Number of steps to backtrack on collision
     """
-    policy = NODEPolicy(model_path, x, dt, switch, backtrack_steps, key)
+    policy = DSPolicy(model_path, x, dt, switch, backtrack_steps, key)
 
     # Store all trajectories
     all_trajectories = []
