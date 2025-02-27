@@ -13,6 +13,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.
 from src.util.plot_tools import plot_gmm, plot_gamma, plot_omega
 from src.util.process_tools import pre_process, compute_output, extract_state, rollout_list
 from src.quat_class import quat_class
+from src.gmm_class import gmm_class
 from load_tools import load_data
 
 
@@ -83,8 +84,8 @@ def load_quat_model(model_path='models'):
 
 
 def train_quat():
-    k_init = 50
-    output_path = 'models/quat_model'
+    k_init = 10
+    output_path = 'models/quat_model.json'
      
     # Set time step for the data
     dt = 1.0/60.0  # Assuming 60Hz sampling rate
@@ -122,22 +123,14 @@ def train_quat():
     p_in, q_in, p_out, q_out = rollout_list(p_in, q_in, p_out, q_out)
     
     # Initialize and train the quaternion dynamics model
-    quat_obj = quat_class(q_in, q_out, q_att, dt, K_init=k_init)
+    quat_obj = quat_class(q_in, q_out, q_att, dt, K_init=k_init, output_path=output_path)
     quat_obj.begin()
     
     # Create output directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     
     # Save the trained model
-    quat_obj._logOut(os.path.dirname(output_path))
-    
-    # Save additional parameters that might not be included in _logOut
-    model_params = {
-        'dt': dt,
-        'q_att': q_att.as_quat().tolist()  # q_att is the attractor quaternion representing the target orientation
-    }
-    with open(os.path.join(os.path.dirname(output_path), 'quat_model_additional_params.json'), 'w') as f:
-        json.dump(model_params, f, indent=2)
+    quat_obj._logOut()
     
     # Evaluate the model on a test trajectory
     step_size = dt
@@ -156,15 +149,18 @@ def test_quat():
     Test a trained quaternion dynamical system on trajectory data.
     
     This function:
-    1. Train the quaternion dynamical system on the trajectory data
+    1. Load the quaternion dynamical system from a saved model
     2. Pick the first trajectory from the loaded data
     3. Simulate the quaternion dynamical system starting from the initial state
     4. Plot two trajectories:
         - The original trajectory
         - The simulated trajectory from the quaternion dynamical system
     """
-    # 1. Train the quaternion dynamical system
-    quat_obj, p_init, q_init, p_att, q_att, dt = train_quat()
+    quat_obj = load_quat_model('models')
+    
+    # Get dt and q_att from the loaded model
+    dt = quat_obj.dt
+    q_att = quat_obj.q_att
     
     # 2. Pick the first trajectory from the loaded data
     first_traj = eef_traj_data[4]
@@ -259,5 +255,5 @@ if __name__ == "__main__":
             print(f"Error loading {os.path.basename(file_path)}: {str(e)}")
     
     print(f"Total number of eef_traj files loaded: {len(eef_traj_data)}")
-    # train_quat()
-    test_quat()
+    train_quat()
+    # test_quat()
