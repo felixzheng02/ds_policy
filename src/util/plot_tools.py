@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.lines as mlines
 from matplotlib.ticker import MaxNLocator
 import random
-
+import matplotlib.colors as mcolors
 
 plt.rcParams.update({
     "text.usetex": True,
@@ -111,19 +111,27 @@ def plot_ds_2d(x_train, x_test_list, lpvds, *args):
 def plot_ds_3d(x_train, x_test_list):
     N = x_train.shape[1]
 
+    # Define colors
+    demo_color = 'k'  # black for demonstrations
+    traj_color = 'r'  # blue for trajectories
+
     fig = plt.figure(figsize=(12, 10))
     if N == 2:
         ax = fig.add_subplot()
-        ax.scatter(x_train[:, 0], x_train[:, 1], color='k', s=1, alpha=0.4, label="Demonstration")
+        ax.scatter(x_train[:, 0], x_train[:, 1], color=demo_color, s=1, alpha=0.4, label="Demonstration")
         for idx, x_test in enumerate(x_test_list):
-            ax.plot(x_test[:, 0], x_test[:, 1], color= 'b')
+            ax.plot(x_test[:, 0], x_test[:, 1], color=traj_color)
         
     elif N == 3:
         ax = fig.add_subplot(projection='3d')
-        ax.scatter(x_train[:, 0], x_train[:, 1], x_train[:, 2], 'o', color='k', s=3, alpha=0.4, label="Demonstration")
+        ax.scatter(x_train[:, 0], x_train[:, 1], x_train[:, 2], 'o', color=demo_color, s=3, alpha=0.4, label="Demonstration")
+
+        # Generate colors starting from traj_color (red)
+        base_color = np.array(mcolors.to_rgb(traj_color))
+        colors = [base_color * (1 - i*0.15) for i in range(len(x_test_list))]
 
         for idx, x_test in enumerate(x_test_list):
-            ax.plot(x_test[:, 0], x_test[:, 1], x_test[:, 2], color= 'b')
+            ax.plot(x_test[:, 0], x_test[:, 1], x_test[:, 2], color=colors[idx])
         ax.set_xlabel(r'$\xi_1$', fontsize=38, labelpad=20)
         ax.set_ylabel(r'$\xi_2$', fontsize=38, labelpad=20)
         ax.set_zlabel(r'$\xi_3$', fontsize=38, labelpad=20)
@@ -134,7 +142,7 @@ def plot_ds_3d(x_train, x_test_list):
         ax.yaxis.set_major_locator(MaxNLocator(nbins=3))
         ax.zaxis.set_major_locator(MaxNLocator(nbins=3))
         ax.tick_params(axis='z', which='major', pad=15)
-        ax.axis('equal')
+        # ax.axis('equal')
 
 
 

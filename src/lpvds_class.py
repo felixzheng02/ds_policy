@@ -24,7 +24,7 @@ class lpvds_class():
 
         # simulation parameters
         self.tol = 10E-3
-        self.max_iter = 10000
+        self.max_iter = 200
 
         # define output path
         file_path           = os.path.dirname(os.path.realpath(__file__))  
@@ -85,23 +85,42 @@ class lpvds_class():
         return x_next, gamma, x_dot
 
 
-    def sim(self, x_init, dt):
+    def sim(self, x_init, dt, reverse=False):
         x_test = [x_init]
         gamma_test = []
         v_test = []
 
         i = 0
-        while np.linalg.norm(x_test[-1]-self.x_att) >= self.tol:
-            if i > self.max_iter:
-                print("Exceed max iteration")
-                break
+        if reverse:
+            # For reverse, run until probabilities become very small (out of distribution)
+            while True:
+                if i > self.max_iter:
+                    print("Exceed max iteration")
+                    break
+                    
+                x_next, gamma, v = self._step(x_test[-1], dt)
+                if np.linalg.norm(x_test[-1] - x_init) > 0.1:  # Break if 0.3m away from start
+                    break
+                # Step in reverse direction
+                x_next = x_test[-1] - v.T * dt
+                x_test.append(x_next)
+                gamma_test.append(gamma[:, 0])
+                v_test.append(v)
+                
+                i += 1
+        else:
+            # Normal forward simulation until reaching attractor
+            while np.linalg.norm(x_test[-1]-self.x_att) >= self.tol:
+                if i > self.max_iter:
+                    print("Exceed max iteration")
+                    break
 
-            x_next, gamma, v = self._step(x_test[-1], dt)
-            x_test.append(x_next)        
-            gamma_test.append(gamma[:, 0])
-            v_test.append(v)
+                x_next, gamma, v = self._step(x_test[-1], dt)
+                x_test.append(x_next)        
+                gamma_test.append(gamma[:, 0])
+                v_test.append(v)
 
-            i += 1
+                i += 1
 
         return np.vstack(x_test)
 

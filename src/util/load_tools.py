@@ -138,6 +138,104 @@ def load_data(input_opt):
         input_path = "/home/emp/lfd_ws/src/lfd_ds/demo/1/all.npz"
         x, x_dot    = _process_npz(input_path)
 
+    elif input_opt == 'custom':
+        print("\nYou selected custom data.\n")
+        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "custom_data","smoothing_window_21_quat")
+        # List all eef trajectory files for first segment
+        traj_files = [f for f in os.listdir(input_path) if f.endswith('_eef_traj.npy') and '_seg_00_' in f]
+        L = len(traj_files)
+        
+        x = []
+        x_dot = []
+        
+        # Print number of segments and timesteps per demo
+        for demo_idx in range(L):
+            demo_num = str(demo_idx).zfill(2)
+            seg_files = sorted([f for f in os.listdir(input_path) if f'demo_{demo_num}_seg_' in f and f.endswith('_eef_traj.npy')])
+            print(f"Demo {demo_num} has {len(seg_files)} segments:")
+            for seg_file in seg_files:
+                seg_num = seg_file[12:14]
+                traj = np.load(os.path.join(input_path, seg_file))
+                contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
+                print(f"  Segment {seg_num}: {len(traj)} timesteps")
+                print(f"  First contact point: {contact_traj[0]}")
+
+        for l in range(L):
+            # Load EEF and handle trajectory data for first segment
+            demo_num = str(l).zfill(2)
+            # Get segment number from user
+            seg_num = "1".zfill(2)
+            eef_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_eef_traj.npy'))
+            handle_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_handle_traj.npy'))
+            contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
+            # Extract positions and rotation matrices
+            eef_pos = eef_traj[:, :3]
+            handle_pos = handle_traj[:, :3]
+            handle_rot = handle_traj[:, 3:]
+            #quat xyzw
+
+            handle_rot = np.array([R.from_quat(q).as_matrix() for q in handle_rot])
+            # Save initial handle pose
+            handle_pos_init = handle_pos[0]
+            handle_rot_init = handle_rot[0]
+            
+            # Compute relative position in world frame
+            rel_pos_world = eef_pos - handle_pos_init
+            
+            # Transform relative positions to initial handle frame
+            pos_traj = np.zeros_like(rel_pos_world)
+            for i in range(len(rel_pos_world)):
+                # Transform to initial handle frame
+                pos_traj[i] = handle_rot_init.T @ rel_pos_world[i]
+
+            # Compute velocities
+            dt = 1/60
+            vel_traj = np.diff(pos_traj, axis=0) / dt
+            # velocity already computed in after transformed frame, so no need to transform
+            # for i in range(len(vel_traj)):
+            #     # Transform velocity to initial handle frame
+            #     vel_traj[i] = handle_rot_init.T @ vel_traj[i]
+            vel_traj = np.vstack([vel_traj, vel_traj[-1]])
+            
+            # Store trajectories
+            if l == 0:
+                x = [pos_traj]
+                x_dot = [vel_traj]
+            else:
+                x.append(pos_traj)
+                x_dot.append(vel_traj)
+        # Visualize trajectories and velocities in 3D
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot each trajectory
+        for pos_traj, vel_traj in zip(x, x_dot):
+            # Plot position trajectory
+            ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
+            
+            # Plot initial point with big dot
+            ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2], 
+                      color='red', s=100, label='Initial Point')
+            
+            # Plot velocity arrows (every 30 points to avoid clutter)
+            stride = 30
+            for i in range(0, len(pos_traj), stride):
+                ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
+                         vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
+                         color='blue', alpha=0.6, length=0.05, normalize=False)
+                
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y') 
+        ax.set_zlabel('Z')
+        ax.set_title('Relative EEF-Handle Trajectories with Velocities')
+        plt.show()
+        # Process both trajectory sets
+        x, x_dot, x_att, x_init = _pre_process(x, x_dot)
+        return x, x_dot, x_att, x_init
+
     else:
         input_path = os.path.join(input_opt, "all.npz")
         x, x_dot    = _process_npz(input_path) 
@@ -148,7 +246,7 @@ def load_data(input_opt):
 
 
 
-def _pre_process(x, x_dot):
+def _pre_process(x, x_dot, reverse=False):
     """ 
     Roll out nested lists into a single list of M entries
 
@@ -157,6 +255,8 @@ def _pre_process(x, x_dot):
         x:     an L-length list of [M, N] NumPy array: L number of trajectories, each containing M observations of N dimension,
     
         x_dot: an L-length list of [M, N] NumPy array: L number of trajectories, each containing M observations velocities of N dimension
+        
+        reverse: bool, if True use first points as attractor and last points as initial
 
     Note:
     -----
@@ -167,13 +267,20 @@ def _pre_process(x, x_dot):
     x_init = []
     x_shifted = []
 
-    x_att  = [x[l][-1, :]  for l in range(L)]  
-    x_att_mean  =  np.mean(np.array(x_att), axis=0, keepdims=True)
-    for l in range(L):
-        x_init.append(x[l][0].reshape(1, -1))
-
-        x_diff = x_att_mean - x_att[l]
-        x_shifted.append(x_diff.reshape(1, -1) + x[l])
+    if reverse:
+        x_att = [x[l][0, :] for l in range(L)]  # Use first points as attractor
+        x_att_mean = np.mean(np.array(x_att), axis=0, keepdims=True)
+        for l in range(L):
+            x_init.append(x[l][-1].reshape(1, -1))  # Use last points as initial
+            x_diff = x_att_mean - x_att[l]
+            x_shifted.append(x_diff.reshape(1, -1) + x[l])
+    else:
+        x_att = [x[l][-1, :] for l in range(L)]  # Use last points as attractor
+        x_att_mean = np.mean(np.array(x_att), axis=0, keepdims=True)
+        for l in range(L):
+            x_init.append(x[l][0].reshape(1, -1))  # Use first points as initial
+            x_diff = x_att_mean - x_att[l]
+            x_shifted.append(x_diff.reshape(1, -1) + x[l])
 
     for l in range(L):
         if l == 0:
@@ -183,7 +290,7 @@ def _pre_process(x, x_dot):
             x_rollout = np.vstack((x_rollout, x_shifted[l]))
             x_dot_rollout = np.vstack((x_dot_rollout, x_dot[l]))
 
-    return  x_rollout, x_dot_rollout, x_att_mean, x_init
+    return x_rollout, x_dot_rollout, x_att_mean, x_init
 
 
 

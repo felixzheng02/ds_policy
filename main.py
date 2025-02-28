@@ -15,7 +15,7 @@ Enter the corresponding option number: '''
 # input_opt  = input(input_message)
 # input_opt = 4
 
-x, x_dot, x_att, x_init = load_tools.load_data(int(1))
+x, x_dot, x_att, x_init = load_tools.load_data('custom')
 
 
 # run lpvds
@@ -25,8 +25,31 @@ lpvds.begin()
 
 # evaluate results
 x_test_list = []
-for x_0 in x_init:
-    x_test_list.append(lpvds.sim(x_0, dt=0.01))
+# Do reverse simulation from attractor 4 times
+
+for _ in range(4):
+    # First simulate backwards from attractor
+    x_start = x_att.copy()
+    # Generate direction in positive y and scale to 1cm
+    random_dir = np.random.normal(0, 1, x_start.shape[1])  # Random direction in all dimensions
+    random_dir[1] = 1.0  # Set y component to 1, others to 0
+    random_dir = random_dir / np.linalg.norm(random_dir)  # Normalize to unit vector
+    random_dir = random_dir * 0.01  # Scale to 1cm
+    x_start += random_dir
+
+    x_reverse = lpvds.sim(x_start, dt=0.01, reverse=True)
+    
+    # Get the endpoint of reverse simulation as starting point
+    x_start_2 = x_reverse[-1:]  # Keep 2D shape by using slice
+    
+    # Then simulate forwards from that point to attractor 
+    x_forward = lpvds.sim(x_start_2, dt=0.01)
+
+    # x_start = x_forward[-1:]
+    
+
+    # Add complete trajectory to test list
+    x_test_list.append(np.vstack([x_reverse, x_forward]))
 
 
 # plot results
