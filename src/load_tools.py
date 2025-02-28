@@ -3,11 +3,9 @@ import numpy as np
 import pyLasaDataset as lasa
 from scipy.io import loadmat
 from scipy.spatial.transform import Rotation as R
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
 
 
-def load_data(input_opt, show_plot=False, separate=False, shift=True):
+def load_data(input_opt):
     """
     Return:
     -------
@@ -142,119 +140,116 @@ def load_data(input_opt, show_plot=False, separate=False, shift=True):
 
     elif input_opt == 'custom':
         print("\nYou selected custom data.\n")
-        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "custom_data")
-        
-        # List all eef trajectory files
-        traj_files = [f for f in os.listdir(input_path) if f.endswith('_eef_traj.npy')]
+        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "custom_data","smoothing_window_21_quat")
+        # List all eef trajectory files for first segment
+        traj_files = [f for f in os.listdir(input_path) if f.endswith('_eef_traj.npy') and '_seg_00_' in f]
         L = len(traj_files)
         
         x = []
         x_dot = []
         
+        # Print number of segments and timesteps per demo
+        for demo_idx in range(L):
+            demo_num = str(demo_idx).zfill(2)
+            seg_files = sorted([f for f in os.listdir(input_path) if f'demo_{demo_num}_seg_' in f and f.endswith('_eef_traj.npy')])
+            print(f"Demo {demo_num} has {len(seg_files)} segments:")
+            for seg_file in seg_files:
+                seg_num = seg_file[12:14]
+                traj = np.load(os.path.join(input_path, seg_file))
+                contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
+                print(f"  Segment {seg_num}: {len(traj)} timesteps")
+                print(f"  First contact point: {contact_traj[0]}")
+
         for l in range(L):
-            # Load EEF and handle trajectory data
-            demo_num = traj_files[l].split('_')[1]  # Get demo number
-            eef_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_eef_traj.npy'))
-            handle_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_handle_traj.npy'))
-            # Check trajectory length
-            
+            # Load EEF and handle trajectory data for first segment
+            demo_num = str(l).zfill(2)
+            # Get segment number from user
+            seg_num = "1".zfill(2)
+            eef_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_eef_traj.npy'))
+            handle_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_handle_traj.npy'))
+            contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
             # Extract positions and rotation matrices
             eef_pos = eef_traj[:, :3]
             handle_pos = handle_traj[:, :3]
-            handle_rot = handle_traj[:, 3:].reshape(-1, 3, 3)  # Reshape to 3x3 rotation matrices
+            handle_rot = handle_traj[:, 3:]
+            #quat xyzw
+
+            handle_rot = np.array([R.from_quat(q).as_matrix() for q in handle_rot])
+            # Save initial handle pose
+            handle_pos_init = handle_pos[0]
+            handle_rot_init = handle_rot[0]
+
+            eef_rot = np.array([R.from_quat(q).as_matrix() for q in eef_traj[:, 3:]])
+
             
             # Compute relative position in world frame
-            rel_pos_world = eef_pos - handle_pos
+            rel_pos_world = eef_pos - handle_pos_init
             
-            # Transform relative positions to handle frame
+            # Transform relative positions to initial handle frame
             pos_traj = np.zeros_like(rel_pos_world)
+
+            rot_traj = np.zeros_like(eef_rot)
             for i in range(len(rel_pos_world)):
-                # R.T @ p transforms from world frame to handle frame 
-                pos_traj[i] = handle_rot[i].T @ rel_pos_world[i]
+                # Transform to initial handle frame
+                pos_traj[i] = handle_rot_init.T @ rel_pos_world[i]
+                rot_traj[i] = handle_rot_init.T @ eef_rot[i]
 
-            # Define break point (example coordinates - adjust as needed)
-            break_point = np.array([0.0, -0.05, -0.05])  # Point in handle frame
-            
-            # Find closest point to break point
-            distances = np.linalg.norm(pos_traj - break_point, axis=1)
-            split_idx = np.argmin(distances)
-            
-            # Split trajectory into pre and post segments
-            if len(pos_traj[:split_idx+1]) < 2 or len(pos_traj[split_idx:]) < 2:
-                continue
-            pos_traj_pre = pos_traj[:split_idx+1]
-            pos_traj_post = pos_traj[split_idx:]
-            
-            # Compute velocities for pre segment
+            # Convert rotation matrices to quaternions
+            quat_traj = np.array([R.from_matrix(rot).as_quat() for rot in rot_traj])
+
+
+            # Compute velocities
             dt = 1/60
-            vel_traj_pre = np.diff(pos_traj_pre, axis=0) / dt
-            for i in range(len(vel_traj_pre)):
-                vel_traj_pre[i] = handle_rot[i+1].T @ handle_rot[i] @ vel_traj_pre[i]
-            vel_traj_pre = np.vstack([vel_traj_pre, vel_traj_pre[-1]])
+            vel_traj = np.diff(pos_traj, axis=0) / dt
+            # velocity already computed in after transformed frame, so no need to transform
+            # for i in range(len(vel_traj)):
+            #     # Transform velocity to initial handle frame
+            #     vel_traj[i] = handle_rot_init.T @ vel_traj[i]
+            vel_traj = np.vstack([vel_traj, vel_traj[-1]])
             
-            # Compute velocities for post segment  
-            vel_traj_post = np.diff(pos_traj_post, axis=0) / dt
-            for i in range(len(vel_traj_post)):
-                vel_traj_post[i] = handle_rot[split_idx+i+1].T @ handle_rot[split_idx+i] @ vel_traj_post[i]
-            vel_traj_post = np.vstack([vel_traj_post, vel_traj_post[-1]])
-            
-            # Store pre and post segments separately
+            # Store trajectories
             if l == 0:
-                x_pre = [pos_traj_pre]
-                x_dot_pre = [vel_traj_pre]
-                x_post = [pos_traj_post]
-                x_dot_post = [vel_traj_post]
+                x = [pos_traj]
+                x_dot = [vel_traj]
+                quat_traj_all = [quat_traj]
             else:
-                x_pre.append(pos_traj_pre)
-                x_dot_pre.append(vel_traj_pre)
-                x_post.append(pos_traj_post)
-                x_dot_post.append(vel_traj_post)
+                x.append(pos_traj)
+                x_dot.append(vel_traj)
+                quat_traj_all.append(quat_traj)
+        # Visualize trajectories and velocities in 3D
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
         
-        # if show_plot:
-        # # Plot each trajectory
-        #     for pos_traj, vel_traj in zip(x_pre, x_dot_pre):
-        #         # Plot position trajectory in blue for pre-grasp
-        #         ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Pre-grasp')
-                
-        #         # Plot velocity arrows (every 20 points to avoid clutter)
-        #         stride = 30
-        #         for i in range(0, len(pos_traj), stride):
-        #             ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
-        #                     vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
-        #                     color='blue', alpha=0.6, length=0.05, normalize=False)
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(121, projection='3d')
+        ax2 = fig.add_subplot(122, projection='3d')
+        
+        # Plot each trajectory
+        for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
+            # Plot position trajectory
+            ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
             
-        #     # Plot post-grasp trajectories in red
-        #     for pos_traj, vel_traj in zip(x_post, x_dot_post):
-        #         ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'r-', label='Post-grasp')
-        #         stride = 30
-        #         for i in range(0, len(pos_traj), stride):
-        #             ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
-        #                     vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
-        #                     color='red', alpha=0.6, length=0.05, normalize=False)
-    
-        #     ax.set_xlabel('X')
-        #     ax.set_ylabel('Y') 
-        #     ax.set_zlabel('Z')
-        #     ax.set_title('Relative EEF-Handle Trajectories with Velocities')
-        #     plt.show()
+            # Plot initial point with big dot
+            ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2], 
+                      color='red', s=100, label='Initial Point')
+            
+            # Plot velocity arrows (every 30 points to avoid clutter)
+            stride = 30
+            for i in range(0, len(pos_traj), stride):
+                ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
+                         vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
+                         color='blue', alpha=0.6, length=0.05, normalize=False)
+            ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
+            # plot the last point of quat_traj
+            ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
+                
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y') 
+        ax.set_zlabel('Z')
+        ax.set_title('Relative EEF-Handle Trajectories with Velocities')
+        plt.show()
         # Process both trajectory sets
-        x_pre_processed, x_dot_pre_processed, x_att_pre, x_init_pre = _pre_process(x_pre, x_dot_pre, separate=separate, shift=shift)
-        x_dot_post_reversed = [-vel_traj for vel_traj in x_dot_post]  # Reverse velocities
-        x_post_processed, x_dot_post_processed, x_att_post, x_init_post = _pre_process(x_post, x_dot_post_reversed, reverse=True, separate=separate, shift=shift)
-        # Plot processed post-grasp trajectories
-        if show_plot:
-            visualize_trajectories(x_pre_processed, 'Pre-grasp')
-            visualize_trajectories(x_post_processed, 'Post-grasp')
-        # Select which trajectory set to return based on flag
-        use_post = False  # Flag to toggle between pre/post trajectories
-        if use_post:
-            x, x_dot = x_post_processed, x_dot_post_processed
-            x_att, x_init = x_att_post, x_init_post
-        else:
-            x, x_dot = x_pre_processed, x_dot_pre_processed 
-            x_att, x_init = x_att_pre, x_init_pre
-
-
+        x, x_dot, x_att, x_init = _pre_process(x, x_dot)
         return x, x_dot, x_att, x_init
 
     else:
@@ -264,61 +259,12 @@ def load_data(input_opt, show_plot=False, separate=False, shift=True):
     return _pre_process(x, x_dot)
 
 
-def visualize_trajectories(x, label):
-    """Visualize multiple trajectories with color gradients representing time progression.
-    
-    Args:
-        x: numpy array of shape (L, M, N) where:
-           L is number of trajectories
-           M is number of points per trajectory
-           N is dimension of each point (should be 3 for 3D visualization)
-        label: string label for the plot title
-    """
-    # Create figure with a specific layout to accommodate colorbar
-    fig = plt.figure(figsize=(12, 8))
-    gs = plt.GridSpec(1, 20)
-    ax = fig.add_subplot(gs[0, :18], projection='3d')
-    cax = fig.add_subplot(gs[0, 18:])
-    
-    # Get number of trajectories and points
-    L, M, N = x.shape
-    
-    # Create a color map from blue to red
-    cmap = plt.cm.RdBu_r  # Red-Blue colormap, reversed to go from blue to red
-    
-    # Create normalized time points for color mapping
-    time_points = np.linspace(0, 1, M-1)
-    colors = cmap(time_points)
-    
-    # Plot each trajectory with the same time-based color gradient
-    for l in range(L):
-        # Plot trajectory segments with color gradient
-        for i in range(M-1):
-            ax.plot(x[l, i:i+2, 0], x[l, i:i+2, 1], x[l, i:i+2, 2],
-                   color=colors[i],
-                   linewidth=2)
-    
-    # Add a colorbar to show time progression
-    sm = plt.cm.ScalarMappable(cmap=cmap,
-                              norm=plt.Normalize(vmin=0, vmax=M))
-    sm.set_array([])
-    cbar = plt.colorbar(sm, cax=cax)
-    cbar.set_label('Time progression', rotation=270, labelpad=15)
-    
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title(f'{label} Trajectories')
-    
-    # Adjust layout to prevent overlap
-    plt.tight_layout()
-    plt.show()
 
 
 
-def _pre_process(x, x_dot, reverse=False, separate=False, shift=True):
+def _pre_process(x, x_dot, reverse=False):
     """ 
-    Roll out nested lists into a single list of M entries or keep trajectories separate
+    Roll out nested lists into a single list of M entries
 
     Parameters:
     -------
@@ -327,16 +273,10 @@ def _pre_process(x, x_dot, reverse=False, separate=False, shift=True):
         x_dot: an L-length list of [M, N] NumPy array: L number of trajectories, each containing M observations velocities of N dimension
         
         reverse: bool, if True use first points as attractor and last points as initial
-        
-        separate: bool, if True keep trajectories separate and return array of size (L, M, N)
-        
-        shift: bool, if True shift trajectories to align their attractors, if False return original trajectories
 
     Note:
     -----
-        M can vary and need not be same between trajectories when separate=False
-        When separate=True, trajectories will be padded to the same length using the last position and zero velocity
-        TODO: trajectories are padded to the same length using the last position and zero velocity
+        M can vary and need not be same between trajectories
     """
 
     L = len(x)
@@ -348,54 +288,25 @@ def _pre_process(x, x_dot, reverse=False, separate=False, shift=True):
         x_att_mean = np.mean(np.array(x_att), axis=0, keepdims=True)
         for l in range(L):
             x_init.append(x[l][-1].reshape(1, -1))  # Use last points as initial
-            if shift:
-                x_diff = x_att_mean - x_att[l]
-                x_shifted.append(x_diff.reshape(1, -1) + x[l])
-            else:
-                x_shifted.append(x[l])
+            x_diff = x_att_mean - x_att[l]
+            x_shifted.append(x_diff.reshape(1, -1) + x[l])
     else:
         x_att = [x[l][-1, :] for l in range(L)]  # Use last points as attractor
         x_att_mean = np.mean(np.array(x_att), axis=0, keepdims=True)
         for l in range(L):
             x_init.append(x[l][0].reshape(1, -1))  # Use first points as initial
-            if shift:
-                x_diff = x_att_mean - x_att[l]
-                x_shifted.append(x_diff.reshape(1, -1) + x[l])
-            else:
-                x_shifted.append(x[l])
+            x_diff = x_att_mean - x_att[l]
+            x_shifted.append(x_diff.reshape(1, -1) + x[l])
 
-    if separate:    
-        # Find maximum length among all trajectories
-        max_length = max(x_shifted[l].shape[0] for l in range(L))
-        N = x_shifted[0].shape[1]  # Get dimension N from first trajectory
-        
-        # Initialize arrays with correct shape (L, M, N)
-        x_array = np.zeros((L, max_length, N))
-        x_dot_array = np.zeros((L, max_length, N))
-        
-        # Fill arrays with data and pad as needed
-        for l in range(L):
-            curr_length = x_shifted[l].shape[0]
-            # Fill existing trajectory data
-            x_array[l, :curr_length, :] = x_shifted[l]
-            x_dot_array[l, :curr_length, :] = x_dot[l]
-            # Pad remaining positions with last position
-            if curr_length < max_length:
-                x_array[l, curr_length:, :] = x_shifted[l][-1]
-                # Velocities are already zero-padded by initialization
-        
-        return x_array, x_dot_array, x_att_mean, x_init
-    else:
-        # Original behavior: roll out into single array
-        for l in range(L):
-            if l == 0:
-                x_rollout = x_shifted[l]
-                x_dot_rollout = x_dot[l]
-            else:
-                x_rollout = np.vstack((x_rollout, x_shifted[l]))
-                x_dot_rollout = np.vstack((x_dot_rollout, x_dot[l]))
+    for l in range(L):
+        if l == 0:
+            x_rollout = x_shifted[l]
+            x_dot_rollout = x_dot[l]
+        else:
+            x_rollout = np.vstack((x_rollout, x_shifted[l]))
+            x_dot_rollout = np.vstack((x_dot_rollout, x_dot[l]))
 
-        return x_rollout, x_dot_rollout, x_att_mean, x_init
+    return x_rollout, x_dot_rollout, x_att_mean, x_init
 
 
 
