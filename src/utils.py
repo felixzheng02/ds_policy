@@ -2,12 +2,11 @@ import os
 import glob
 import numpy as np
 
-def load_data(path):
-    data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
-                           'custom_data/smoothing_window_21_test_saving_contact')
-    
-    # Get all eef_traj files in the directory
-    traj_files = sorted(glob.glob(os.path.join(data_dir, '*_eef_traj.npy')))
+def load_data(path, regex=None):
+    if regex is None:
+        traj_files = sorted(glob.glob(os.path.join(path, '*')))
+    else:
+        traj_files = sorted(glob.glob(os.path.join(path, regex)))
     
     # Load each file and store in a list
     trajs = []

@@ -68,7 +68,7 @@ class DSPolicy:
 
         # NODE model
         if pos_model_path is None:
-            self.train_pos_model(demo_trajs, self.dt, key)
+            self.pos_model = self.train_pos_model(demo_trajs, self.dt, key)
         else:
             model_name = os.path.basename(pos_model_path)
             width_str = model_name.split("width")[1].split("_")[0]
@@ -87,8 +87,14 @@ class DSPolicy:
         else:
             self.quat_model = self.load_quat_model(quat_model_path, q_in, q_out)
     
-    def train_pos_model(self, demo_trajs, key):
-        return
+    def train_pos_model(self, key):
+        model_path = 'neural_ode/models/mlp_width64_depth3.eqx'
+        x, x_dot = pos_data_preprocess()
+        return train(model_path, x, x_dot, data_size=3, batch_size=1, lr_strategy=(1e-3, 1e-3, 1e-3), steps_strategy=(5000, 5000, 5000), length_strategy=(0.4, 0.7, 1), width_size=64, depth=3, seed=1000, plot=True, print_every=100, save_every=1000)
+
+    def pos_data_preprocess(self):
+        
+        
 
     def train_quat_model(self, q_in, q_out, q_att, k_init=10):
         output_path = 'neural_ode/models/quat_model.json'
