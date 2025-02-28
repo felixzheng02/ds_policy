@@ -3,11 +3,14 @@ import os
 import glob
 import numpy as np
 import utils
+from load_tools import load_data
 
-demo_trajs = utils.load_data(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
-                           'custom_data/smoothing_window_21_test_saving_contact'), '*_eef_traj.npy')
+x, x_dot, r = load_data('custom')
 
-ds_policy = DSPolicy(demo_trajs, pos_model_path='neural_ode/models/mlp_width64_depth3.eqx')
+demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
+
+
+ds_policy = DSPolicy(demo_trajs, x_dot, pos_model_path='neural_ode/models/mlp_width64_depth3.eqx')
 
 for i in range(100):
     state = demo_trajs[0][i]

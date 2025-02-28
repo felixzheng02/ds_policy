@@ -29,7 +29,7 @@ from node_clf import Func_rot, NeuralODE_rot
 
 def import_data(show_plot=True, separate=True, shift=False):
     x, x_dot, x_att, x_init = load_data(
-        "custom", show_plot=show_plot, separate=separate, shift=shift
+        "custom"
     )  # x: positions (N, 3), x_dot: velocities (N, 3)
     return x, x_dot, x_att, x_init
 
@@ -244,16 +244,6 @@ def train(
     key = jrandom.PRNGKey(seed)
     data_key, model_key, loader_key = jrandom.split(key, 3)
 
-    # Ensure input data has correct shape
-    if x.ndim != 3 or x_dot.ndim != 3:
-        raise ValueError(
-            "Input data must be 3D arrays with shape (n_trajectories, n_points, n_features)"
-        )
-
-    n_trajectories, n_points, data_size = x.shape
-    if x_dot.shape != (n_trajectories, n_points, data_size):
-        raise ValueError("x and x_dot must have the same shape")
-
     # Initialize model with 3D input/output
     model = NeuralODE_rot(data_size, width_size, depth, key=model_key)
 
@@ -310,9 +300,9 @@ def train(
         # Plot average velocity components across all trajectories
         for i, comp in enumerate(["x", "y", "z"]):
             plt.subplot(1, 3, i + 1)
-            # Plot mean velocities across trajectories
-            plt.plot(x_dot[:, :, i].mean(axis=0), label=f"Real d{comp}/dt")
-            plt.plot(v_pred[:, :, i].mean(axis=0), "--", label=f"Pred d{comp}/dt")
+            # Plot velocities (assuming x and x_dot have shape (N, 3))
+            plt.plot(x_dot[:, i], label=f"Real d{comp}/dt")
+            plt.plot(v_pred[:, i], "--", label=f"Pred d{comp}/dt")
             plt.legend()
             plt.title(f"{comp} velocity component (mean across trajectories)")
 
@@ -359,18 +349,13 @@ def main(
     x = jnp.array(x, dtype=jnp.float32)
     x_dot = jnp.array(x_dot, dtype=jnp.float32)
 
-    # Reshape data if needed (assuming x and x_dot are already in (L, M, 3) format)
-    if x.ndim != 3:
-        raise ValueError(
-            "Input data must be in (L, M, 3) format where L is number of trajectories, M is points per trajectory"
-        )
 
     if train_model:
         model = train(
             model_path,
             x,
             x_dot,
-            data_size=x.shape[2],  # Use the last dimension as data_size
+            data_size=x.shape[-1],  # Use the last dimension as data_size
             lr_strategy=(1e-3, 1e-4, 1e-5),
             steps_strategy=(5000, 5000, 5000),
             length_strategy=(1, 1, 1),

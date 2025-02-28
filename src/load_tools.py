@@ -140,7 +140,7 @@ def load_data(input_opt):
 
     elif input_opt == 'custom':
         print("\nYou selected custom data.\n")
-        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "..", "..", "custom_data","smoothing_window_21_quat")
+        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "custom_data","smoothing_window_21_quat")
         # List all eef trajectory files for first segment
         traj_files = [f for f in os.listdir(input_path) if f.endswith('_eef_traj.npy') and '_seg_00_' in f]
         L = len(traj_files)
@@ -199,7 +199,7 @@ def load_data(input_opt):
 
 
             # Compute velocities
-            dt = 1/60
+            dt = 0.01
             vel_traj = np.diff(pos_traj, axis=0) / dt
             # velocity already computed in after transformed frame, so no need to transform
             # for i in range(len(vel_traj)):
@@ -249,8 +249,8 @@ def load_data(input_opt):
         ax.set_title('Relative EEF-Handle Trajectories with Velocities')
         plt.show()
         # Process both trajectory sets
-        x, x_dot, x_att, x_init = _pre_process(x, x_dot)
-        return x, x_dot, x_att, x_init
+        # x, x_dot, x_att, x_init = _pre_process(x, x_dot)
+        return x, x_dot, quat_traj_all
 
     else:
         input_path = os.path.join(input_opt, "all.npz")
