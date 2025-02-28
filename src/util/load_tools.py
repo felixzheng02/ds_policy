@@ -178,15 +178,25 @@ def load_data(input_opt):
             # Save initial handle pose
             handle_pos_init = handle_pos[0]
             handle_rot_init = handle_rot[0]
+
+            eef_rot = np.array([R.from_quat(q).as_matrix() for q in eef_traj[:, 3:]])
+
             
             # Compute relative position in world frame
             rel_pos_world = eef_pos - handle_pos_init
             
             # Transform relative positions to initial handle frame
             pos_traj = np.zeros_like(rel_pos_world)
+
+            rot_traj = np.zeros_like(eef_rot)
             for i in range(len(rel_pos_world)):
                 # Transform to initial handle frame
                 pos_traj[i] = handle_rot_init.T @ rel_pos_world[i]
+                rot_traj[i] = handle_rot_init.T @ eef_rot[i]
+
+            # Convert rotation matrices to quaternions
+            quat_traj = np.array([R.from_matrix(rot).as_quat() for rot in rot_traj])
+
 
             # Compute velocities
             dt = 1/60
@@ -201,18 +211,21 @@ def load_data(input_opt):
             if l == 0:
                 x = [pos_traj]
                 x_dot = [vel_traj]
+                quat_traj_all = [quat_traj]
             else:
                 x.append(pos_traj)
                 x_dot.append(vel_traj)
+                quat_traj_all.append(quat_traj)
         # Visualize trajectories and velocities in 3D
         import matplotlib.pyplot as plt
         from mpl_toolkits.mplot3d import Axes3D
         
         fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(111, projection='3d')
+        ax = fig.add_subplot(121, projection='3d')
+        ax2 = fig.add_subplot(122, projection='3d')
         
         # Plot each trajectory
-        for pos_traj, vel_traj in zip(x, x_dot):
+        for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
             # Plot position trajectory
             ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
             
@@ -226,6 +239,9 @@ def load_data(input_opt):
                 ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
                          vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
                          color='blue', alpha=0.6, length=0.05, normalize=False)
+            ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
+            # plot the last point of quat_traj
+            ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
                 
         ax.set_xlabel('X')
         ax.set_ylabel('Y') 
