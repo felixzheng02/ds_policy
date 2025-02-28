@@ -83,7 +83,7 @@ def train_quat():
     output_path = 'models/quat_model.json'
      
     # Set time step for the data
-    dt = 1.0/60.0  # Assuming 60Hz sampling rate
+    dt = 0.01  # Assuming 60Hz sampling rate
     
     # Process position and orientation data from the loaded trajectories
     p_raw = []  # Position trajectories
@@ -250,5 +250,5 @@ if __name__ == "__main__":
             print(f"Error loading {os.path.basename(file_path)}: {str(e)}")
     
     print(f"Total number of eef_traj files loaded: {len(eef_traj_data)}")
-    # train_quat()
-    test_quat()
+    train_quat()
+    # test_quat()
