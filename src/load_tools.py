@@ -152,13 +152,13 @@ def load_data(input_opt):
         for demo_idx in range(L):
             demo_num = str(demo_idx).zfill(2)
             seg_files = sorted([f for f in os.listdir(input_path) if f'demo_{demo_num}_seg_' in f and f.endswith('_eef_traj.npy')])
-            print(f"Demo {demo_num} has {len(seg_files)} segments:")
+            # print(f"Demo {demo_num} has {len(seg_files)} segments:")
             for seg_file in seg_files:
                 seg_num = seg_file[12:14]
                 traj = np.load(os.path.join(input_path, seg_file))
                 contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
-                print(f"  Segment {seg_num}: {len(traj)} timesteps")
-                print(f"  First contact point: {contact_traj[0]}")
+                # print(f"  Segment {seg_num}: {len(traj)} timesteps")
+                # print(f"  First contact point: {contact_traj[0]}")
 
         for l in range(L):
             # Load EEF and handle trajectory data for first segment
@@ -216,38 +216,38 @@ def load_data(input_opt):
                 x.append(pos_traj)
                 x_dot.append(vel_traj)
                 quat_traj_all.append(quat_traj)
-        # Visualize trajectories and velocities in 3D
-        import matplotlib.pyplot as plt
-        from mpl_toolkits.mplot3d import Axes3D
+        # # Visualize trajectories and velocities in 3D
+        # import matplotlib.pyplot as plt
+        # from mpl_toolkits.mplot3d import Axes3D
         
-        fig = plt.figure(figsize=(10, 8))
-        ax = fig.add_subplot(121, projection='3d')
-        ax2 = fig.add_subplot(122, projection='3d')
+        # fig = plt.figure(figsize=(10, 8))
+        # ax = fig.add_subplot(121, projection='3d')
+        # ax2 = fig.add_subplot(122, projection='3d')
         
-        # Plot each trajectory
-        for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
-            # Plot position trajectory
-            ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
+        # # Plot each trajectory
+        # for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
+        #     # Plot position trajectory
+        #     ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
             
-            # Plot initial point with big dot
-            ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2], 
-                      color='red', s=100, label='Initial Point')
+        #     # Plot initial point with big dot
+        #     ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2], 
+        #               color='red', s=100, label='Initial Point')
             
-            # Plot velocity arrows (every 30 points to avoid clutter)
-            stride = 30
-            for i in range(0, len(pos_traj), stride):
-                ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
-                         vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
-                         color='blue', alpha=0.6, length=0.05, normalize=False)
-            ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
-            # plot the last point of quat_traj
-            ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
+        #     # Plot velocity arrows (every 30 points to avoid clutter)
+        #     stride = 30
+        #     for i in range(0, len(pos_traj), stride):
+        #         ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
+        #                  vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
+        #                  color='blue', alpha=0.6, length=0.05, normalize=False)
+        #     ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
+        #     # plot the last point of quat_traj
+        #     ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
                 
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y') 
-        ax.set_zlabel('Z')
-        ax.set_title('Relative EEF-Handle Trajectories with Velocities')
-        plt.show()
+        # ax.set_xlabel('X')
+        # ax.set_ylabel('Y') 
+        # ax.set_zlabel('Z')
+        # ax.set_title('Relative EEF-Handle Trajectories with Velocities')
+        # plt.show()
         # Process both trajectory sets
         # x, x_dot, x_att, x_init = _pre_process(x, x_dot)
         return x, x_dot, quat_traj_all

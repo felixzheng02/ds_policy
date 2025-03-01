@@ -30,6 +30,7 @@ class DSPolicy:
         key: jax.random.PRNGKey)
     get_x_dot(state: np.ndarray(n_dims), alpha_V: float, lookahead: int) -> np.ndarray(x_dim)
     get_r_dot(state: np.ndarray(n_dims)) -> np.ndarray(r_dim)
+    NOTE: everything should be quaternion except get_r_dot returns (roll, pitch, yaw)
     """
 
     def __init__(
@@ -48,7 +49,7 @@ class DSPolicy:
         if demo_trajs[0].shape[1] == 7: # quaternion
             self.x_dim = 3
             self.r_dim = 4
-        elif demo_trajs[0].shape[1] == 3: # position
+        elif demo_trajs[0].shape[1] == 3: # only position
             self.x_dim = 3
             self.r_dim = 0
         else:
@@ -89,7 +90,7 @@ class DSPolicy:
             self.quat_model = self.load_quat_model(quat_model_path, q_in, q_out)
     
     def train_pos_model(self, x, x_dot):
-        model_path = 'neural_ode/models/mlp_width64_depth3.eqx'
+        model_path = 'neural_ode/models/mlp_width256_depth5.eqx'
         # x, x_dot = self.pos_data_preprocess()
         return train(model_path, x, x_dot, data_size=3, batch_size=1, lr_strategy=(1e-3, 1e-3, 1e-3), steps_strategy=(5000, 5000, 5000), length_strategy=(0.4, 0.7, 1), width_size=64, depth=3, seed=1000, plot=True, print_every=100, save_every=1000)
 
@@ -100,6 +101,7 @@ class DSPolicy:
         Returns:
             x: np.ndarray of shape (N, x_dim) containing positions
             x_dot: np.ndarray of shape (N, x_dim) containing velocities
+            TODO: not used
         """
         # Initialize lists to store positions and velocities
         x_list = []
@@ -206,11 +208,12 @@ class DSPolicy:
     def get_action(self, state):
         """
         Args:
-            state: np.ndarray(n_dims)
+            state
         Returns:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
-        x_dot = self.get_x_dot(state[:self.x_dim])
+
+        x_dot = self.get_x_dot(state[:self.x_dim], alpha_V=50.0, lookahead=5)
         r_dot = self.get_r_dot(state[self.x_dim:self.x_dim+self.r_dim])
         return jnp.concatenate([x_dot, r_dot])
 
@@ -310,11 +313,3 @@ class DSPolicy:
             point_idx = closest_idx - self.demo_trajs_segment_idx[traj_idx]
 
         return int(traj_idx), int(point_idx)
-
-
-if __name__ == "__main__":
-    model_path = "neural_ode/models/mlp_width64_depth3.eqx"
-    demo_trajs = [np.zeros((10, 7)), np.ones((5, 7))]
-    policy = NODEPolicy(model_path, demo_trajs)
-    print(policy.demo_trajs_flat.shape)
-    print(policy.demo_trajs_segment_idx)
