@@ -349,7 +349,6 @@ def main(
     x = jnp.array(x, dtype=jnp.float32)
     x_dot = jnp.array(x_dot, dtype=jnp.float32)
 
-
     if train_model:
         model = train(
             model_path,

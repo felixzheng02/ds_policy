@@ -10,7 +10,7 @@ def load_data(input_opt):
     Return:
     -------
         x:     a [M, N] NumPy array: M observations of N dimension
-    
+
         x_dot: a [M, N] NumPy array: M observations velocities of N dimension
 
         x_att: a [1, N] NumPy array of attractor
@@ -20,143 +20,228 @@ def load_data(input_opt):
 
     if input_opt == 1:
         print("\nYou selected PC-GMM benchmark data.\n")
-        pcgmm_list = ["3D_sink", "3D_viapoint_1", "3D-cube-pick", "3D_viapoint_2", "2D_Lshape",  "2D_incremental_1", "2D_multi-behavior", "2D_messy-snake"]
+        pcgmm_list = [
+            "3D_sink",
+            "3D_viapoint_1",
+            "3D-cube-pick",
+            "3D_viapoint_2",
+            "2D_Lshape",
+            "2D_incremental_1",
+            "2D_multi-behavior",
+            "2D_messy-snake",
+        ]
 
         message = """Available Models: \n"""
         for i in range(len(pcgmm_list)):
-            message += "{:2}) {: <18} ".format(i+1, pcgmm_list[i])
-            if (i+1) % 6 ==0:
+            message += "{:2}) {: <18} ".format(i + 1, pcgmm_list[i])
+            if (i + 1) % 6 == 0:
                 message += "\n"
-        message += '\nEnter the corresponding option number [type 0 to exit]: '
-        
+        message += "\nEnter the corresponding option number [type 0 to exit]: "
+
         # data_opt = int(input(message))
         data_opt = int(7)
         if data_opt == 0:
             sys.exit()
-        elif data_opt<0 or data_opt>len(pcgmm_list):
+        elif data_opt < 0 or data_opt > len(pcgmm_list):
             print("Invalid data option")
             sys.exit()
 
-        data_name  = str(pcgmm_list[data_opt-1]) + ".mat"
-        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..", "..", "dataset", "pc-gmm-data", data_name)
+        data_name = str(pcgmm_list[data_opt - 1]) + ".mat"
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "..",
+            "dataset",
+            "pc-gmm-data",
+            data_name,
+        )
 
         data_ = loadmat(r"{}".format(input_path))
         data_ = np.array(data_["data"])
 
-        N     = int(data_[0, 0].shape[0]/2)
+        N = int(data_[0, 0].shape[0] / 2)
         if N == 2:
             L = data_.shape[1]
-            x     = [data_[0, l][:N, :].T  for l in range(L)]
-            x_dot = [data_[0, l][N:, :].T  for l in range(L)]
+            x = [data_[0, l][:N, :].T for l in range(L)]
+            x_dot = [data_[0, l][N:, :].T for l in range(L)]
         elif N == 3:
             L = data_.shape[0]
             L_sub = np.random.choice(range(L), 6, replace=False)
 
-            x     = [data_[l, 0][:N, :].T  for l in range(L)]
-            x_dot = [data_[l, 0][N:, :].T  for l in range(L)]
-
+            x = [data_[l, 0][:N, :].T for l in range(L)]
+            x_dot = [data_[l, 0][N:, :].T for l in range(L)]
 
     elif input_opt == 2:
         print("\nYou selected LASA benchmark dataset.\n")
 
         # suppress print message from lasa package
         original_stdout = sys.stdout
-        sys.stdout = open('/dev/null', 'w')
+        sys.stdout = open("/dev/null", "w")
         sys.stdout = original_stdout
 
-        lasa_list = ["Angle", "BendedLine", "CShape", "DoubleBendedLine", "GShape", "heee", "JShape", "JShape_2", "Khamesh", "Leaf_1",
-        "Leaf_2", "Line", "LShape", "NShape", "PShape", "RShape", "Saeghe", "Sharpc", "Sine", "Snake",
-        "Spoon", "Sshape", "Trapezoid", "Worm", "WShape", "Zshape", "Multi_Models_1", "Multi_Models_2", "Multi_Models_3", "Multi_Models_4"]
+        lasa_list = [
+            "Angle",
+            "BendedLine",
+            "CShape",
+            "DoubleBendedLine",
+            "GShape",
+            "heee",
+            "JShape",
+            "JShape_2",
+            "Khamesh",
+            "Leaf_1",
+            "Leaf_2",
+            "Line",
+            "LShape",
+            "NShape",
+            "PShape",
+            "RShape",
+            "Saeghe",
+            "Sharpc",
+            "Sine",
+            "Snake",
+            "Spoon",
+            "Sshape",
+            "Trapezoid",
+            "Worm",
+            "WShape",
+            "Zshape",
+            "Multi_Models_1",
+            "Multi_Models_2",
+            "Multi_Models_3",
+            "Multi_Models_4",
+        ]
 
         message = """Available Models: \n"""
         for i in range(len(lasa_list)):
-            message += "{:2}) {: <18} ".format(i+1, lasa_list[i])
-            if (i+1) % 6 ==0:
+            message += "{:2}) {: <18} ".format(i + 1, lasa_list[i])
+            if (i + 1) % 6 == 0:
                 message += "\n"
-        message += '\nEnter the corresponding option number [type 0 to exit]: '
-        
+        message += "\nEnter the corresponding option number [type 0 to exit]: "
+
         data_opt = int(input(message))
 
         if data_opt == 0:
             sys.exit()
-        elif data_opt<0 or data_opt > len(lasa_list):
+        elif data_opt < 0 or data_opt > len(lasa_list):
             print("Invalid data option")
             sys.exit()
 
-        data = getattr(lasa.DataSet, lasa_list[data_opt-1])
-        demos = data.demos 
+        data = getattr(lasa.DataSet, lasa_list[data_opt - 1])
+        demos = data.demos
         sub_sample = 1
         L = len(demos)
 
-        x     = [demos[l].pos[:, ::sub_sample].T for l in range(L)]
+        x = [demos[l].pos[:, ::sub_sample].T for l in range(L)]
         x_dot = [demos[l].vel[:, ::sub_sample].T for l in range(L)]
-
 
     elif input_opt == 3:
         print("\nYou selected Damm demo dataset.\n")
 
         damm_list = ["bridge", "Nshape", "orientation"]
-        
+
         message = """Available Models: \n"""
         for i in range(len(damm_list)):
-            message += "{:2}) {: <18} ".format(i+1, damm_list[i])
-            if (i+1) % 6 ==0:
+            message += "{:2}) {: <18} ".format(i + 1, damm_list[i])
+            if (i + 1) % 6 == 0:
                 message += "\n"
-        message += '\nEnter the corresponding option number [type 0 to exit]: '
-        
+        message += "\nEnter the corresponding option number [type 0 to exit]: "
+
         data_opt = int(input(message))
-    
-        folder_name = str(damm_list[data_opt-1])
-        input_path  = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..", "..", "dataset", "damm-demo-data", folder_name, "all.mat")
-        x, x_dot    = _process_bag(input_path)
 
-
+        folder_name = str(damm_list[data_opt - 1])
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "..",
+            "dataset",
+            "damm-demo-data",
+            folder_name,
+            "all.mat",
+        )
+        x, x_dot = _process_bag(input_path)
 
     elif input_opt == 4:
         print("\nYou selected demo.\n")
-        input_path  = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..", "..", "dataset", "demo", "obstacle", "all.mat")
-        x, x_dot    = _process_bag(input_path)
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "..",
+            "dataset",
+            "demo",
+            "obstacle",
+            "all.mat",
+        )
+        x, x_dot = _process_bag(input_path)
 
-
-
-    elif input_opt == 'demo':
+    elif input_opt == "demo":
         print("\nYou selected demo.\n")
-        input_path  = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..", "..", "dataset", "demo", "all.mat")
-        x, x_dot    = _process_bag(input_path)
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "..",
+            "dataset",
+            "demo",
+            "all.mat",
+        )
+        x, x_dot = _process_bag(input_path)
 
-
-
-    elif input_opt == 'increm':
+    elif input_opt == "increm":
         print("\nYou selected demo.\n")
-        input_path  = os.path.join(os.path.dirname(os.path.realpath(__file__)),"..", "..", "dataset", "increm", "all.mat")
-        x, x_dot    = _process_bag(input_path)
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "..",
+            "dataset",
+            "increm",
+            "all.mat",
+        )
+        x, x_dot = _process_bag(input_path)
 
-
-
-    elif input_opt == 'apple':
+    elif input_opt == "apple":
         print("\nYou selected apple.\n")
         input_path = "/home/emp/lfd_ws/src/lfd_ds/demo/1/all.npz"
-        x, x_dot    = _process_npz(input_path)
+        x, x_dot = _process_npz(input_path)
 
-    elif input_opt == 'custom':
+    elif input_opt == "custom":
         print("\nYou selected custom data.\n")
-        input_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "custom_data","smoothing_window_21_quat")
+        input_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "..",
+            "custom_data",
+            "smoothing_window_21_quat",
+        )
         # List all eef trajectory files for first segment
-        traj_files = [f for f in os.listdir(input_path) if f.endswith('_eef_traj.npy') and '_seg_00_' in f]
+        traj_files = [
+            f
+            for f in os.listdir(input_path)
+            if f.endswith("_eef_traj.npy") and "_seg_00_" in f
+        ]
         L = len(traj_files)
-        
+
         x = []
         x_dot = []
-        
+
         # Print number of segments and timesteps per demo
         for demo_idx in range(L):
             demo_num = str(demo_idx).zfill(2)
-            seg_files = sorted([f for f in os.listdir(input_path) if f'demo_{demo_num}_seg_' in f and f.endswith('_eef_traj.npy')])
+            seg_files = sorted(
+                [
+                    f
+                    for f in os.listdir(input_path)
+                    if f"demo_{demo_num}_seg_" in f and f.endswith("_eef_traj.npy")
+                ]
+            )
             # print(f"Demo {demo_num} has {len(seg_files)} segments:")
             for seg_file in seg_files:
                 seg_num = seg_file[12:14]
                 traj = np.load(os.path.join(input_path, seg_file))
-                contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
+                contact_traj = np.load(
+                    os.path.join(
+                        input_path, f"demo_{demo_num}_seg_{seg_num}_contact_traj.npy"
+                    ),
+                    allow_pickle=True,
+                )
                 # print(f"  Segment {seg_num}: {len(traj)} timesteps")
                 # print(f"  First contact point: {contact_traj[0]}")
 
@@ -165,14 +250,25 @@ def load_data(input_opt):
             demo_num = str(l).zfill(2)
             # Get segment number from user
             seg_num = "1".zfill(2)
-            eef_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_eef_traj.npy'))
-            handle_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_handle_traj.npy'))
-            contact_traj = np.load(os.path.join(input_path, f'demo_{demo_num}_seg_{seg_num}_contact_traj.npy'), allow_pickle=True)
+            eef_traj = np.load(
+                os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")
+            )
+            handle_traj = np.load(
+                os.path.join(
+                    input_path, f"demo_{demo_num}_seg_{seg_num}_handle_traj.npy"
+                )
+            )
+            contact_traj = np.load(
+                os.path.join(
+                    input_path, f"demo_{demo_num}_seg_{seg_num}_contact_traj.npy"
+                ),
+                allow_pickle=True,
+            )
             # Extract positions and rotation matrices
             eef_pos = eef_traj[:, :3]
             handle_pos = handle_traj[:, :3]
             handle_rot = handle_traj[:, 3:]
-            #quat xyzw
+            # quat xyzw
 
             handle_rot = np.array([R.from_quat(q).as_matrix() for q in handle_rot])
             # Save initial handle pose
@@ -181,10 +277,9 @@ def load_data(input_opt):
 
             eef_rot = np.array([R.from_quat(q).as_matrix() for q in eef_traj[:, 3:]])
 
-            
             # Compute relative position in world frame
             rel_pos_world = eef_pos - handle_pos_init
-            
+
             # Transform relative positions to initial handle frame
             pos_traj = np.zeros_like(rel_pos_world)
 
@@ -197,7 +292,6 @@ def load_data(input_opt):
             # Convert rotation matrices to quaternions
             quat_traj = np.array([R.from_matrix(rot).as_quat() for rot in rot_traj])
 
-
             # Compute velocities
             dt = 0.01
             vel_traj = np.diff(pos_traj, axis=0) / dt
@@ -206,7 +300,7 @@ def load_data(input_opt):
             #     # Transform velocity to initial handle frame
             #     vel_traj[i] = handle_rot_init.T @ vel_traj[i]
             vel_traj = np.vstack([vel_traj, vel_traj[-1]])
-            
+
             # Store trajectories
             if l == 0:
                 x = [pos_traj]
@@ -219,20 +313,20 @@ def load_data(input_opt):
         # # Visualize trajectories and velocities in 3D
         # import matplotlib.pyplot as plt
         # from mpl_toolkits.mplot3d import Axes3D
-        
+
         # fig = plt.figure(figsize=(10, 8))
         # ax = fig.add_subplot(121, projection='3d')
         # ax2 = fig.add_subplot(122, projection='3d')
-        
+
         # # Plot each trajectory
         # for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
         #     # Plot position trajectory
         #     ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
-            
+
         #     # Plot initial point with big dot
-        #     ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2], 
+        #     ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2],
         #               color='red', s=100, label='Initial Point')
-            
+
         #     # Plot velocity arrows (every 30 points to avoid clutter)
         #     stride = 30
         #     for i in range(0, len(pos_traj), stride):
@@ -242,9 +336,9 @@ def load_data(input_opt):
         #     ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
         #     # plot the last point of quat_traj
         #     ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
-                
+
         # ax.set_xlabel('X')
-        # ax.set_ylabel('Y') 
+        # ax.set_ylabel('Y')
         # ax.set_zlabel('Z')
         # ax.set_title('Relative EEF-Handle Trajectories with Velocities')
         # plt.show()
@@ -254,24 +348,21 @@ def load_data(input_opt):
 
     else:
         input_path = os.path.join(input_opt, "all.npz")
-        x, x_dot    = _process_npz(input_path) 
+        x, x_dot = _process_npz(input_path)
 
     return _pre_process(x, x_dot)
 
 
-
-
-
 def _pre_process(x, x_dot, reverse=False):
-    """ 
+    """
     Roll out nested lists into a single list of M entries
 
     Parameters:
     -------
         x:     an L-length list of [M, N] NumPy array: L number of trajectories, each containing M observations of N dimension,
-    
+
         x_dot: an L-length list of [M, N] NumPy array: L number of trajectories, each containing M observations velocities of N dimension
-        
+
         reverse: bool, if True use first points as attractor and last points as initial
 
     Note:
@@ -309,26 +400,24 @@ def _pre_process(x, x_dot, reverse=False):
     return x_rollout, x_dot_rollout, x_att_mean, x_init
 
 
-
-
 def _process_bag(path):
-    """ Process .mat files that is converted from .bag files """
+    """Process .mat files that is converted from .bag files"""
 
     data_ = loadmat(r"{}".format(path))
-    data_ = data_['data_ee_pose']
+    data_ = data_["data_ee_pose"]
     L = data_.shape[1]
 
-    x     = []
-    x_dot = [] 
+    x = []
+    x_dot = []
 
     sample_step = 4
-    vel_thresh  = 1e-3 
-    
+    vel_thresh = 1e-3
+
     for l in range(L):
-        data_l = data_[0, l]['pose'][0,0]
-        pos_traj  = data_l[:3, ::sample_step]
+        data_l = data_[0, l]["pose"][0, 0]
+        pos_traj = data_l[:3, ::sample_step]
         quat_traj = data_l[3:7, ::sample_step]
-        time_traj = data_l[-1, ::sample_step].reshape(1,-1)
+        time_traj = data_l[-1, ::sample_step].reshape(1, -1)
 
         raw_diff_pos = np.diff(pos_traj)
         vel_mag = np.linalg.norm(raw_diff_pos, axis=0).flatten()
@@ -338,39 +427,36 @@ def _process_bag(path):
         if first_non_zero_index >= last_non_zero_index:
             raise Exception("Sorry, vel are all zero")
 
-        pos_traj  = pos_traj[:, first_non_zero_index:last_non_zero_index]
+        pos_traj = pos_traj[:, first_non_zero_index:last_non_zero_index]
         quat_traj = quat_traj[:, first_non_zero_index:last_non_zero_index]
         time_traj = time_traj[:, first_non_zero_index:last_non_zero_index]
         vel_traj = np.diff(pos_traj) / np.diff(time_traj)
-        
+
         x.append(pos_traj[:, 0:-1].T)
         x_dot.append(vel_traj.T)
 
     return x, x_dot
 
 
-
-
-
 def _process_npz(path):
-    """ Process .npz files that is converted from .bag files """
+    """Process .npz files that is converted from .bag files"""
 
     data_ = np.load(path, allow_pickle=True)
-    data_ = data_['data_ee_pose']
+    data_ = data_["data_ee_pose"]
     L = data_.shape[0]
 
-    x     = []
-    x_dot = [] 
+    x = []
+    x_dot = []
 
     sample_step = 1
-    vel_thresh  = 1e-3 
-    
+    vel_thresh = 1e-3
+
     cutoff = 20
     for l in range(L):
-        data_l = data_[l]['pose']
-        pos_traj  = data_l[:3, ::sample_step]
+        data_l = data_[l]["pose"]
+        pos_traj = data_l[:3, ::sample_step]
         quat_traj = data_l[3:7, ::sample_step]
-        time_traj = data_l[-1, ::sample_step].reshape(1,-1)
+        time_traj = data_l[-1, ::sample_step].reshape(1, -1)
 
         raw_diff_pos = np.diff(pos_traj)
         vel_mag = np.linalg.norm(raw_diff_pos, axis=0).flatten()
@@ -380,17 +466,16 @@ def _process_npz(path):
         if first_non_zero_index >= last_non_zero_index:
             raise Exception("Sorry, vel are all zero")
 
-        pos_traj  = pos_traj[:, first_non_zero_index:last_non_zero_index]
+        pos_traj = pos_traj[:, first_non_zero_index:last_non_zero_index]
         quat_traj = quat_traj[:, first_non_zero_index:last_non_zero_index]
         time_traj = time_traj[:, first_non_zero_index:last_non_zero_index]
 
-
-        pos_traj  = pos_traj[:, cutoff: ]
-        quat_traj = quat_traj[:, cutoff: ]
-        time_traj = time_traj[:, cutoff: ]
+        pos_traj = pos_traj[:, cutoff:]
+        quat_traj = quat_traj[:, cutoff:]
+        time_traj = time_traj[:, cutoff:]
 
         vel_traj = np.diff(pos_traj) / np.diff(time_traj)
-        
+
         x.append(pos_traj[:, 0:-1].T)
         x_dot.append(vel_traj.T)
 
