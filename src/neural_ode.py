@@ -33,30 +33,30 @@ class NeuralODE(nn.Module):
             depth: Number of hidden layers
         """
         super(NeuralODE, self).__init__()
-        
+
         # Create a list to hold all layers
         layers = []
-        
+
         # Input layer
         layers.append(nn.Linear(data_size, width_size))
         layers.append(nn.Tanh())
-        
+
         # Hidden layers
         for _ in range(depth - 1):
             layers.append(nn.Linear(width_size, width_size))
             layers.append(nn.Tanh())
-        
+
         # Output layer
         layers.append(nn.Linear(width_size, data_size))
-        
+
         # Combine all layers into a sequential model
         self.mlp = nn.Sequential(*layers)
-        
+
         # Apply orthogonal initialization to all linear layers
         for m in self.mlp.modules():
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight)
-    
+
     def forward(self, x):
         """Predict velocity directly from position.
 
@@ -68,8 +68,9 @@ class NeuralODE(nn.Module):
         """
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32)
-            
+
         return self.mlp(x)
+
 
 # class NeuralODE_rot(nn.Module):
 #     """
@@ -109,11 +110,11 @@ class NeuralODE(nn.Module):
 #             ts = torch.tensor(ts, dtype=torch.float32)
 #         if not isinstance(y0, torch.Tensor):
 #             y0 = torch.tensor(y0, dtype=torch.float32)
-            
+
 #         # Make sure y0 has the right shape
 #         if y0.ndim == 1:
 #             y0 = y0.unsqueeze(0)  # Add batch dimension
-            
+
 #         # Solve ODE
 #         solution = odeint(
 #             self.func_rot,
@@ -124,10 +125,10 @@ class NeuralODE(nn.Module):
 #             atol=1e-6,
 #             options={'max_num_steps': 4000}
 #         )
-        
+
 #         # Rearrange dimensions to match expected output shape: (time, batch, state)
 #         solution = solution.permute(0, 1, 2) if solution.ndim == 3 else solution
-        
+
 #         return solution
 
 #     def forward(self, ts, y0):

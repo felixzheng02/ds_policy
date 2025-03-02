@@ -31,12 +31,18 @@ class DSPolicy:
     """
     __init__(model_path: str,
         demo_trajs: List[np.ndarray(n_steps, n_dim=x_dim+r_dim)],
+        demo_vels: List[np.ndarray(n_steps, x_dim)],
         dt: float,
         switch: bool,
-        backtrack_steps: int,
-        key: jax.random.PRNGKey)
+        backtrack_steps: int)
     NOTE: either load_pos_model or train_pos_model should be called before get_action
-    train_pos_model(save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-3, 1e-3), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100)
+    train_pos_model(save_path: str, 
+        batch_size: int=1, 
+        lr_strategy: tuple=(1e-3, 1e-3, 1e-3), 
+        steps_strategy: tuple=(5000, 5000, 5000), 
+        length_strategy: tuple=(0.4, 0.7, 1), 
+        plot: bool=True, 
+        print_every: int=100)
     load_pos_model(model_path: str)
     NOTE: either train_quat_model or load_quat_model should be called before get_action
     train_quat_model(save_path: str, k_init: int=10)
@@ -104,9 +110,9 @@ class DSPolicy:
         Args:
             save_path: path to save the trained model
             batch_size: number of trajectories to train on at a time
-            lr_strategy: learning rate strategy
-            steps_strategy: number of steps to train
-            length_strategy: length of the trajectories to train on
+            lr_strategy: learning rate in each phase
+            steps_strategy: number of steps in each phase
+            length_strategy: fraction of the trajectories available for training in each phase
             plot: whether to plot the training progress
             print_every: print the training progress every print_every steps
         """

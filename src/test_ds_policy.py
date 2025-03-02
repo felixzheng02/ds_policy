@@ -13,7 +13,7 @@ class Simulator:
         self.ds_policy = ds_policy
         self.traj = []
 
-    def simulate(self, init_state, save_path:str, n_steps:int=100):
+    def simulate(self, init_state, save_path: str, n_steps: int = 100):
         state = init_state
         self.traj.append(state.copy())
         for i in range(n_steps):
@@ -23,14 +23,14 @@ class Simulator:
             self.traj.append(state.copy())
         np.savez(
             save_path,
-            demo_trajs=self.ds_policy.demo_trajs,
+            demo_trajs=np.array(self.ds_policy.demo_trajs, dtype=object),
             traj=self.traj,
             allow_pickle=True
         )
         return self.traj, self.ds_policy.demo_trajs
 
 
-def animate(data_path:str, save_path:str=None):
+def animate(data_path: str, save_path: str = None):
     """
     Args:
         data_path: path to the data file
@@ -169,9 +169,14 @@ if __name__ == "__main__":
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
         ds_policy = DSPolicy(demo_trajs, x_dot)
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width256_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=False)
-        ds_policy.load_pos_model(save_path="DS-Policy/models/mlp_width256_depth3.pt")
-        ds_policy.train_quat_model(save_path="DS-Policy/models/quat_model.json", k_init=10)
-        # ds_policy.load_quat_model(save_path="DS-Policy/models/quat_model.json") TODO: this doesn't work for now
+        ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width256_depth3.pt")
+        ds_policy.train_quat_model(
+            save_path="DS-Policy/models/quat_model.json", k_init=10
+        )
+        # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
-        simulator.simulate(np.array([0, -0.2, -0.1, 0, 0, 0], dtype=np.float64), "DS-Policy/data/test_ds_policy.npz")
-    animate("DS-Policy/data/test_ds_policy.npz")
+        simulator.simulate(
+            np.array([0, -0.2, -0.1, 0, 0, 0], dtype=np.float64),
+            "DS-Policy/data/test_ds_policy.npz",
+        )
+    animate("DS-Policy/data/test_ds_policy.npz", "DS-Policy/data/test_ds_policy.mp4")

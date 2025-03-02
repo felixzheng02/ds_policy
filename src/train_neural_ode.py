@@ -6,18 +6,19 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
-from scipy import interpolate
-from matplotlib.lines import Line2D
-import sys
-import matplotlib.animation as animation
-from torchdiffeq import odeint
 
 from load_tools import load_data
 from neural_ode import NeuralODE
 
 
-def plot_vector_field(model_path: str, demo_trajs: list[np.ndarray], data_size: int, width_size: int, depth: int, save_path: str=None):
+def plot_vector_field(
+    model_path: str,
+    demo_trajs: list[np.ndarray],
+    data_size: int,
+    width_size: int,
+    depth: int,
+    save_path: str = None,
+):
     """
     Visualize the vector field of the trained model along with training data.
 
@@ -40,9 +41,18 @@ def plot_vector_field(model_path: str, demo_trajs: list[np.ndarray], data_size: 
     x_range = demo_trajs_flat[:, 0].max() - demo_trajs_flat[:, 0].min()
     y_range = demo_trajs_flat[:, 1].max() - demo_trajs_flat[:, 1].min()
     z_range = demo_trajs_flat[:, 2].max() - demo_trajs_flat[:, 2].min()
-    x_min, x_max = demo_trajs_flat[:, 0].min() - padding * x_range, demo_trajs_flat[:, 0].max() + padding * x_range
-    y_min, y_max = demo_trajs_flat[:, 1].min() - padding * y_range, demo_trajs_flat[:, 1].max() + padding * y_range
-    z_min, z_max = demo_trajs_flat[:, 2].min() - padding * z_range, demo_trajs_flat[:, 2].max() + padding * z_range
+    x_min, x_max = (
+        demo_trajs_flat[:, 0].min() - padding * x_range,
+        demo_trajs_flat[:, 0].max() + padding * x_range,
+    )
+    y_min, y_max = (
+        demo_trajs_flat[:, 1].min() - padding * y_range,
+        demo_trajs_flat[:, 1].max() + padding * y_range,
+    )
+    z_min, z_max = (
+        demo_trajs_flat[:, 2].min() - padding * z_range,
+        demo_trajs_flat[:, 2].max() + padding * z_range,
+    )
 
     # Create grid points
     grid_points = 10
@@ -50,12 +60,12 @@ def plot_vector_field(model_path: str, demo_trajs: list[np.ndarray], data_size: 
     y_grid = torch.linspace(y_min, y_max, grid_points)
     z_grid = torch.linspace(z_min, z_max, grid_points)
 
-    X, Y, Z = torch.meshgrid(x_grid, y_grid, z_grid, indexing='ij')
-    
+    X, Y, Z = torch.meshgrid(x_grid, y_grid, z_grid, indexing="ij")
+
     X_np = X.numpy()
     Y_np = Y.numpy()
     Z_np = Z.numpy()
-    
+
     # Evaluate vector field at each point
     U = np.zeros_like(X_np)
     V = np.zeros_like(Y_np)
@@ -64,7 +74,9 @@ def plot_vector_field(model_path: str, demo_trajs: list[np.ndarray], data_size: 
     for i in range(grid_points):
         for j in range(grid_points):
             for k in range(grid_points):
-                point = torch.tensor([X_np[i, j, k], Y_np[i, j, k], Z_np[i, j, k]], dtype=torch.float32)
+                point = torch.tensor(
+                    [X_np[i, j, k], Y_np[i, j, k], Z_np[i, j, k]], dtype=torch.float32
+                )
                 with torch.no_grad():
                     velocity = model.forward(point)
                 velocity_np = velocity.numpy()
@@ -112,7 +124,15 @@ def plot_vector_field(model_path: str, demo_trajs: list[np.ndarray], data_size: 
 
 
 def rollout_trajectory(
-    model_path: str, demo_trajs: list[np.ndarray], init_point: np.ndarray, data_size: int, width_size: int, depth: int, dt: float=0.01, n_steps: int=1000, save_path: str=None
+    model_path: str,
+    demo_trajs: list[np.ndarray],
+    init_point: np.ndarray,
+    data_size: int,
+    width_size: int,
+    depth: int,
+    dt: float = 0.01,
+    n_steps: int = 1000,
+    save_path: str = None,
 ):
     """
     Test the trained model with a random initial point and visualize the resulting trajectory.
@@ -145,12 +165,34 @@ def rollout_trajectory(
     y_range = demo_trajs_flat[:, 1].max() - demo_trajs_flat[:, 1].min()
     z_range = demo_trajs_flat[:, 2].max() - demo_trajs_flat[:, 2].min()
 
-    ax.set_xlim([demo_trajs_flat[:, 0].min() - padding * x_range, demo_trajs_flat[:, 0].max() + padding * x_range])
-    ax.set_ylim([demo_trajs_flat[:, 1].min() - padding * y_range, demo_trajs_flat[:, 1].max() + padding * y_range])
-    ax.set_zlim([demo_trajs_flat[:, 2].min() - padding * z_range, demo_trajs_flat[:, 2].max() + padding * z_range])
+    ax.set_xlim(
+        [
+            demo_trajs_flat[:, 0].min() - padding * x_range,
+            demo_trajs_flat[:, 0].max() + padding * x_range,
+        ]
+    )
+    ax.set_ylim(
+        [
+            demo_trajs_flat[:, 1].min() - padding * y_range,
+            demo_trajs_flat[:, 1].max() + padding * y_range,
+        ]
+    )
+    ax.set_zlim(
+        [
+            demo_trajs_flat[:, 2].min() - padding * z_range,
+            demo_trajs_flat[:, 2].max() + padding * z_range,
+        ]
+    )
 
     # Plot training data for reference
-    ax.plot3D(demo_trajs_flat[:, 0], demo_trajs_flat[:, 1], demo_trajs_flat[:, 2], "b-", alpha=0.3, label="Training Data")
+    ax.plot3D(
+        demo_trajs_flat[:, 0],
+        demo_trajs_flat[:, 1],
+        demo_trajs_flat[:, 2],
+        "b-",
+        alpha=0.3,
+        label="Training Data",
+    )
 
     # Plot generated trajectory
     ax.plot3D(
@@ -191,15 +233,15 @@ def train(
     x: list[np.ndarray],
     x_dot: list[np.ndarray],
     save_path: str,
-    data_size: int=3,
-    batch_size: int=1, # TODO: not used
-    lr_strategy: tuple=(1e-3, 1e-3, 1e-3),
-    steps_strategy: tuple=(5000, 5000, 5000),
-    length_strategy: tuple=(0.4, 0.7, 1), # TODO: not used
-    width_size: int=64,
-    depth: int=3,
-    plot: bool=False,
-    print_every: int=100
+    data_size: int = 3,
+    batch_size: int = 1,  # TODO: not used
+    lr_strategy: tuple = (1e-3, 1e-3, 1e-3),
+    steps_strategy: tuple = (5000, 5000, 5000),
+    length_strategy: tuple = (0.4, 0.7, 1),  # TODO: not used
+    width_size: int = 64,
+    depth: int = 3,
+    plot: bool = False,
+    print_every: int = 100,
 ):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -216,7 +258,9 @@ def train(
     for lr, steps in zip(lr_strategy, steps_strategy):
         # Setup optimizer with learning rate scheduler
         optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=steps, eta_min=0.1*lr)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=steps, eta_min=0.1 * lr
+        )
         loss_fn = nn.MSELoss()
 
         for step in range(steps):
@@ -228,14 +272,14 @@ def train(
             loss.backward()
             optimizer.step()
             scheduler.step()
-            
+
             end_time = time.time()
 
             if (step % print_every) == 0 or step == steps - 1:
                 print(
                     f"Step: {step}, Loss: {loss.item()}, Computation time: {end_time - start_time}"
                 )
-            
+
     torch.save(model.state_dict(), save_path)
 
     if plot:
@@ -263,6 +307,7 @@ def train(
 
     return model
 
+
 if __name__ == "__main__":
     width_size = 64
     depth = 3
@@ -283,11 +328,13 @@ if __name__ == "__main__":
             width_size=width_size,
             depth=depth,
             plot=True,
-            print_every=100
+            print_every=100,
         )
 
     if True:
         plot_vector_field(model_path, x, data_size, width_size, depth)
 
     if True:
-        rollout_trajectory(model_path, x, np.array([0, -0.2, -0.2]), data_size, width_size, depth)
+        rollout_trajectory(
+            model_path, x, np.array([0, -0.2, -0.2]), data_size, width_size, depth
+        )

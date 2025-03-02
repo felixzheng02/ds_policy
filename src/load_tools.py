@@ -293,7 +293,7 @@ def load_data(input_opt):
             quat_traj = np.array([R.from_matrix(rot).as_quat() for rot in rot_traj])
 
             # Compute velocities
-            dt = 1/60
+            dt = 1 / 60
             vel_traj = np.diff(pos_traj, axis=0) / dt
             # velocity already computed in after transformed frame, so no need to transform
             # for i in range(len(vel_traj)):
