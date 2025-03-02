@@ -13,25 +13,24 @@ class Simulator:
         self.ds_policy = ds_policy
         self.traj = []
 
-    def simulate(self, init_state, n_steps=100, save_path=None):
+    def simulate(self, init_state, save_path:str, n_steps:int=100):
         state = init_state
-        self.traj.append(state)
+        self.traj.append(state.copy())
         for i in range(n_steps):
             quat = utils.euler_to_quat(state[3:])
             action = self.ds_policy.get_action(np.concatenate([state[:3], quat]))
             state += action * self.ds_policy.dt
-            self.traj.append(state)
-        if save_path is not None:
-            np.savez(
-                save_path,
-                demo_trajs=self.ds_policy.demo_trajs,
-                traj=self.traj,
-                allow_pickle=True,
-            )
+            self.traj.append(state.copy())
+        np.savez(
+            save_path,
+            demo_trajs=self.ds_policy.demo_trajs,
+            traj=self.traj,
+            allow_pickle=True
+        )
         return self.traj, self.ds_policy.demo_trajs
 
 
-def animate(data_path, save_path=None):
+def animate(data_path:str, save_path:str=None):
     """
     Args:
         data_path: path to the data file
@@ -169,10 +168,10 @@ if __name__ == "__main__":
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
         ds_policy = DSPolicy(demo_trajs, x_dot)
-        # NOTE: add model path to avoid training model every time
-        # e.g. ds_policy = DSPolicy(demo_trajs, x_dot, pos_model_path='neural_ode/models/mlp_width64_depth3.eqx')
-        # TODO: sometimes "cannot load model when allow_pickle=False"
-        # TODO: cannot load quat model from json file now
+        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width256_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=False)
+        ds_policy.load_pos_model(save_path="DS-Policy/models/mlp_width256_depth3.pt")
+        ds_policy.train_quat_model(save_path="DS-Policy/models/quat_model.json", k_init=10)
+        # ds_policy.load_quat_model(save_path="DS-Policy/models/quat_model.json") TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
-        simulator.simulate(np.array([0, 0, 0, 0, 0, 0]))
-    animate("neural_ode/data/test_ds_policy.npz")
+        simulator.simulate(np.array([0, -0.2, -0.1, 0, 0, 0], dtype=np.float64), "DS-Policy/data/test_ds_policy.npz")
+    animate("DS-Policy/data/test_ds_policy.npz")

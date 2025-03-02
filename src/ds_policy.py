@@ -1,13 +1,10 @@
 import os
 import sys
-import jax.random as jrandom
-import time
-from node_clf import NeuralODE_rot
-import equinox as eqx
-import jax.numpy as jnp
+from neural_ode import NeuralODE
 import numpy as np
+import torch
 from jaxopt import OSQP
-
+from scipy import sparse  # Add this import for sparse matrices
 # Add the quaternion_ds package to sys.path to import it
 sys.path.append(
     os.path.join(
@@ -18,7 +15,7 @@ sys.path.append(
 
 import json
 
-from train_node_clf import train
+from train_neural_ode import train
 from scipy.spatial.transform import Rotation as R
 from src.gmm_class import gmm_class
 from src.quat_class import quat_class
@@ -38,26 +35,27 @@ class DSPolicy:
         switch: bool,
         backtrack_steps: int,
         key: jax.random.PRNGKey)
+    NOTE: either load_pos_model or train_pos_model should be called before get_action
+    train_pos_model(save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-3, 1e-3), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100)
+    load_pos_model(model_path: str)
+    NOTE: either train_quat_model or load_quat_model should be called before get_action
+    train_quat_model(save_path: str, k_init: int=10)
+    load_quat_model(model_path: str)
     get_action(state: np.ndarray(n_dims)) -> (dx, dy, dz, droll, dpitch, dyaw)
-    get_x_dot(state: np.ndarray(n_dims), alpha_V: float, lookahead: int) -> (dx, dy, dz)
-    get_r_dot(state: np.ndarray(n_dims)) -> (droll, dpitch, dyaw)
-    NOTE: everything should be quaternion except get_r_dot returns (roll, pitch, yaw)
     """
 
     def __init__(
         self,
-        demo_trajs,
-        x_dot,
-        pos_model_path=None,
-        quat_model_path=None,
-        dt=0.01,
-        switch=False,
-        backtrack_steps=0,
-        key=None,
+        demo_trajs: list[np.ndarray],
+        demo_vels: list[np.ndarray],
+        dt: float=0.01,
+        switch: bool=False,
+        backtrack_steps: int=0
     ):
         """
         Args:
             demo_trajs: List of demo trajectories [np.ndarray(n_steps, n_dim=x_dim+r_dim)]. Assume n_steps can vary, n_dim is fixed.
+            demo_vels: List of velocities [np.ndarray(n_steps, n_dim=x_dim)]. Assume n_steps can vary, n_dim is fixed.
             pos_model_path: String of NODE model file path
             quat_model_path: String of quaternion model file path
             dt: Time step
@@ -68,69 +66,69 @@ class DSPolicy:
         if demo_trajs[0].shape[1] == 7:  # quaternion
             self.x_dim = 3
             self.r_dim = 4
-        elif demo_trajs[0].shape[1] == 3:  # only position
-            self.x_dim = 3
-            self.r_dim = 0
         else:
             raise ValueError(f"Invalid demo trajectory shape: {demo_trajs[0].shape}")
 
         self.demo_trajs = demo_trajs
-        self.demo_trajs_flat = jnp.concatenate([traj for traj in demo_trajs], axis=0)
-        self.demo_trajs_segment_idx = np.cumsum(
+        self.demo_trajs_flat = np.concatenate(demo_trajs, axis=0)
+        self.demo_segment_idx = np.cumsum(
             [0] + [traj.shape[0] for traj in demo_trajs]
         )[:-1]
-        self.demo_x_dot_flat = jnp.concatenate([vel for vel in x_dot], axis=0)
+        self.demo_vels = demo_vels
         self.dt = dt
         self.switch = switch
         self.backtrack_steps = backtrack_steps
-
+            
         self.ref_traj_idx = None
         self.ref_point_idx = None
 
-        # NODE model
-        if pos_model_path is None:
-            self.pos_model = self.train_pos_model(
-                self.demo_trajs_flat[:, : self.x_dim], self.demo_x_dot_flat
-            )
-        else:
-            model_name = os.path.basename(pos_model_path)
-            width_str = model_name.split("width")[1].split("_")[0]
-            depth_str = model_name.split("depth")[1].split(".")[0]
-            width_size = int(width_str)
-            depth = int(depth_str)
-            if key is None:
-                key = jrandom.PRNGKey(int(time.time()))
-            template_model = NeuralODE_rot(self.x_dim, width_size, depth, key=key)
-            self.pos_model = eqx.tree_deserialise_leaves(pos_model_path, template_model)
-
-        # quaternion DS model
-        p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att = (
+        self.pos_model = None
+        self.quat_model = None
+        self.p_in, self.q_in, self.p_out, self.q_out, self.p_init, self.q_init, self.p_att, self.q_att = (
             self.quad_data_preprocess(demo_trajs)
         )
-        if quat_model_path is None:
-            self.quat_model = self.train_quat_model(q_in, q_out, q_att)
-        else:
-            self.quat_model = self.load_quat_model(quat_model_path, q_in, q_out)
+        
 
-    def train_pos_model(self, x, x_dot):
-        model_path = "neural_ode/models/mlp_width256_depth5.eqx"
-        # x, x_dot = self.pos_data_preprocess()
-        return train(
-            model_path,
-            x,
-            x_dot,
-            data_size=3,
-            batch_size=1,
-            lr_strategy=(1e-3, 1e-3, 1e-3),
-            steps_strategy=(5000, 5000, 5000),
-            length_strategy=(0.4, 0.7, 1),
-            width_size=64,
-            depth=3,
-            seed=1000,
-            plot=True,
-            print_every=100,
-            save_every=1000,
+    def load_pos_model(self, model_path: str):
+        model_name = os.path.basename(model_path)
+        width_str = model_name.split("width")[1].split("_")[0]
+        depth_str = model_name.split("depth")[1].split(".")[0]
+        width_size = int(width_str)
+        depth = int(depth_str)
+        self.pos_model = NeuralODE(self.x_dim, width_size, depth)
+        self.pos_model.load_state_dict(torch.load(model_path, weights_only=True))
+        self.pos_model.eval()
+    
+    def train_pos_model(self, save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-3, 1e-3), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100):
+        """
+        Args:
+            save_path: path to save the trained model
+            batch_size: number of trajectories to train on at a time
+            lr_strategy: learning rate strategy
+            steps_strategy: number of steps to train
+            length_strategy: length of the trajectories to train on
+            plot: whether to plot the training progress
+            print_every: print the training progress every print_every steps
+        """
+        width_str = save_path.split("width")[1].split("_")[0]
+        depth_str = save_path.split("depth")[1].split(".")[0]
+        width_size = int(width_str)
+        depth = int(depth_str)
+        self.pos_model = train(
+            [traj[:, :self.x_dim] for traj in self.demo_trajs],
+            self.demo_vels,
+            save_path,
+            data_size=self.x_dim,
+            batch_size=batch_size,
+            lr_strategy=lr_strategy,
+            steps_strategy=steps_strategy,
+            length_strategy=length_strategy,
+            width_size=width_size,
+            depth=depth,
+            plot=plot,
+            print_every=print_every
         )
+        self.pos_model.eval()
 
     def pos_data_preprocess(self):
         """
@@ -163,20 +161,19 @@ class DSPolicy:
 
         return x, x_dot
 
-    def train_quat_model(self, q_in, q_out, q_att, k_init=10):
-        output_path = "neural_ode/models/quat_model.json"
+    def train_quat_model(self, save_path: str, k_init: int=10):
         quat_obj = quat_class(
-            q_in, q_out, q_att, self.dt, K_init=k_init, output_path=output_path
+            self.q_in, self.q_out, self.q_att, self.dt, K_init=k_init, output_path=save_path
         )
         quat_obj.begin()
 
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         quat_obj._logOut()
 
-        return quat_obj
+        self.quat_model = quat_obj
 
-    def load_quat_model(self, quat_model_path, q_in, q_out):
-        with open(quat_model_path, "r") as f:
+    def load_quat_model(self, model_path: str):
+        with open(model_path, "r") as f:
             model_data = json.load(f)
 
         # Extract parameters from the loaded data
@@ -187,7 +184,7 @@ class DSPolicy:
         q_att_array = np.array(model_data.get("att_ori"))
         q_att = R.from_quat(q_att_array)
 
-        quat_obj = quat_class(q_in, q_out, q_att, dt, K_init=K)
+        self.quat_model = quat_class(self.q_in, self.q_out, self.q_att, self.dt, K_init=K)
 
         Prior = np.array(model_data.get("Prior"))
         Mu_flat = np.array(model_data.get("Mu"))
@@ -198,21 +195,19 @@ class DSPolicy:
 
         Mu_rot = [R.from_quat(mu) for mu in Mu]
 
-        quat_obj.gmm = gmm_class(q_in, q_att, K)
-        quat_obj.gmm.Prior = Prior
-        quat_obj.gmm.Mu = Mu_rot
-        quat_obj.gmm.Sigma = Sigma
+        self.quat_model.gmm = gmm_class(self.q_in, self.q_att, K)
+        self.quat_model.gmm.Prior = Prior
+        self.quat_model.gmm.Mu = Mu_rot
+        self.quat_model.gmm.Sigma = Sigma
 
         A_ori_flat = np.array(model_data.get("A_ori"))
-        quat_obj.A_ori = A_ori_flat.reshape(2 * K, 4, 4)
+        self.quat_model.A_ori = A_ori_flat.reshape(2 * K, 4, 4)
 
-        quat_obj.K = K
-        quat_obj.dt = dt
-        quat_obj.q_att = q_att
+        self.quat_model.K = K
+        self.quat_model.dt = dt
+        self.quat_model.q_att = q_att
 
-        return quat_obj
-
-    def quad_data_preprocess(self, trajs):
+    def quad_data_preprocess(self, trajs: list[np.ndarray]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         p_raw = []  # Position trajectories
         q_raw = []  # Orientation trajectories
         t_raw = []  # Time vectors
@@ -247,29 +242,30 @@ class DSPolicy:
 
         return p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att
 
-    def get_action(self, state):
+    def get_action(self, state: np.ndarray) -> np.ndarray:
         """
         Args:
-            state
+            state: position + quaternion
         Returns:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
 
-        x_dot = self.get_x_dot(state[: self.x_dim], alpha_V=50.0, lookahead=5)
-        r_dot = self.get_r_dot(state[self.x_dim : self.x_dim + self.r_dim])
-        return jnp.concatenate([x_dot, r_dot])
+        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], alpha_V=50.0, lookahead=5)
+        r_dot: np.ndarray = self.get_r_dot(state[self.x_dim : self.x_dim + self.r_dim])
+        return np.concatenate([x_dot, r_dot])
 
-    def get_x_dot(self, x_state, alpha_V=20.0, lookahead=5):
+    def get_x_dot(self, x_state: np.ndarray, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
         """
         Args:
             state: np.ndarray(n_dims)
             alpha_V: float, CLF parameter, controls how close to follow the reference trajectory
-            lookahead: number of points to look ahead on the chosen trajectory for smoother tracking, TODO: not used for now
+            lookahead: number of points to look ahead on the chosen trajectory for smoother tracking
         Returns:
             x_dot: np.ndarray(dx, dy, dz)
         """
         if self.switch or self.ref_traj_idx is None or self.ref_point_idx is None:
             self.ref_traj_idx, self.ref_point_idx = self.choose_traj(x_state)
+        self.ref_point_idx = min(self.ref_point_idx+lookahead, self.demo_trajs[self.ref_traj_idx].shape[0] - 1)
         qp = OSQP()
         x_dot, u_star = self.compute_clf(
             x_state,
@@ -280,7 +276,7 @@ class DSPolicy:
         )
         return x_dot
 
-    def get_r_dot(self, r_state):
+    def get_r_dot(self, r_state: np.ndarray) -> np.ndarray:
         """
         Args:
             state: np.ndarray(n_dims)
@@ -298,30 +294,27 @@ class DSPolicy:
 
         return omega
 
-    def compute_clf(self, current_state, ref_state, qp, model, alpha_V):
+    def compute_clf(self, current_state: np.ndarray, ref_state: np.ndarray, qp: OSQP, model: NeuralODE, alpha_V: float) -> tuple[np.ndarray, np.ndarray]:
         # Compute tracking error
         error = current_state - ref_state
 
         # CLF (Control Lyapunov Function)
-        V = jnp.sum(jnp.square(error)) / 2
+        V = np.sum(np.square(error)) / 2
 
-        # Get nominal dynamics from neural ODE
-        f_x = model.func_rot(0, current_state, None)
-
-        # Get reference dynamics
-        f_xref = model.func_rot(0, ref_state, None)
+        with torch.no_grad():
+            f_x: np.ndarray = model.forward(torch.tensor(current_state, dtype=torch.float32)).numpy()
+            f_xref: np.ndarray = model.forward(torch.tensor(ref_state, dtype=torch.float32)).numpy()
 
         # Compute CLF derivative terms
-        s = jnp.dot(error, f_x - f_xref)
+        s = np.dot(error, f_x - f_xref)
 
         # QP parameters for CLF-based control
-        Q_opt = jnp.eye(3)  # Cost on control input
+        Q_opt = np.eye(3) # Cost on control input
         G_opt = 2 * error.reshape(1, -1)  # CLF derivative terms
-        h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
+        h_opt = np.array([-alpha_V * V - 2 * s])  # CLF constraint
 
-        # Solve QP using OSQP
         sol = qp.run(
-            params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)
+            params_obj=(Q_opt, np.zeros(3)), params_ineq=(G_opt, h_opt)
         ).params
         u_star = sol.primal.reshape(-1)
 
@@ -330,7 +323,7 @@ class DSPolicy:
 
         return x_dot, u_star
 
-    def choose_traj(self, state) -> tuple[int, int]:
+    def choose_traj(self, state: np.ndarray) -> tuple[int, int]:
         """
         Choose trajectory index based on state.
         TODO: for now uses Euclidean distance.
@@ -341,19 +334,19 @@ class DSPolicy:
             point_idx within the traj: int
         """
         # Compute Euclidean distances between state and all points in flattened trajectories
-        distances = jnp.sqrt(
-            jnp.sum((self.demo_trajs_flat[:, : self.x_dim] - state) ** 2, axis=1)
+        distances = np.sqrt(
+            np.sum((self.demo_trajs_flat[:, : self.x_dim] - state) ** 2, axis=1)
         )
         # Find the index of the closest point in flattened trajectories
-        closest_idx = jnp.argmin(distances)
+        closest_idx = np.argmin(distances)
         # Determine which trajectory the closest point belongs to
         traj_idx = (
-            jnp.searchsorted(self.demo_trajs_segment_idx, closest_idx, side="right") - 1
+            np.searchsorted(self.demo_segment_idx, closest_idx, side="right") - 1
         )
         # Compute point index within the chosen trajectory
         if traj_idx == 0:
             point_idx = closest_idx
         else:
-            point_idx = closest_idx - self.demo_trajs_segment_idx[traj_idx]
+            point_idx = closest_idx - self.demo_segment_idx[traj_idx]
 
         return int(traj_idx), int(point_idx)

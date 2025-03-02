@@ -236,7 +236,7 @@ def train(
                     f"Step: {step}, Loss: {loss.item()}, Computation time: {end_time - start_time}"
                 )
             
-    torch.save(model.state_dict(), model_path)
+    torch.save(model.state_dict(), save_path)
 
     if plot:
         # Plot velocity predictions vs actual for each trajectory
