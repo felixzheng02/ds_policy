@@ -163,13 +163,13 @@ def animate(data_path: str, save_path: str = None):
 
 if __name__ == "__main__":
     if (
-        True
+        False
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
-        ds_policy = DSPolicy(demo_trajs, x_dot)
-        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width256_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=False)
-        ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width256_depth3.pt")
+        ds_policy = DSPolicy(demo_trajs, dt=1/60)
+        ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width64_depth1.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
+        # ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width256_depth3.pt")
         ds_policy.train_quat_model(
             save_path="DS-Policy/models/quat_model.json", k_init=10
         )
@@ -179,4 +179,4 @@ if __name__ == "__main__":
             np.array([0, -0.2, -0.1, 0, 0, 0], dtype=np.float64),
             "DS-Policy/data/test_ds_policy.npz",
         )
-    animate("DS-Policy/data/test_ds_policy.npz", "DS-Policy/data/test_ds_policy.mp4")
+    animate("DS-Policy/data/test_ds_policy.npz")

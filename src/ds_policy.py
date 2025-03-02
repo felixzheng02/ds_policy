@@ -31,7 +31,6 @@ class DSPolicy:
     """
     __init__(model_path: str,
         demo_trajs: List[np.ndarray(n_steps, n_dim=x_dim+r_dim)],
-        demo_vels: List[np.ndarray(n_steps, x_dim)],
         dt: float,
         switch: bool,
         backtrack_steps: int)
@@ -53,7 +52,6 @@ class DSPolicy:
     def __init__(
         self,
         demo_trajs: list[np.ndarray],
-        demo_vels: list[np.ndarray],
         dt: float=0.01,
         switch: bool=False,
         backtrack_steps: int=0
@@ -61,7 +59,6 @@ class DSPolicy:
         """
         Args:
             demo_trajs: List of demo trajectories [np.ndarray(n_steps, n_dim=x_dim+r_dim)]. Assume n_steps can vary, n_dim is fixed.
-            demo_vels: List of velocities [np.ndarray(n_steps, n_dim=x_dim)]. Assume n_steps can vary, n_dim is fixed.
             pos_model_path: String of NODE model file path
             quat_model_path: String of quaternion model file path
             dt: Time step
@@ -74,14 +71,16 @@ class DSPolicy:
             self.r_dim = 4
         else:
             raise ValueError(f"Invalid demo trajectory shape: {demo_trajs[0].shape}")
-
+        
+        self.dt = dt
         self.demo_trajs = demo_trajs
+        self.demo_pos = [traj[:, :self.x_dim] for traj in demo_trajs]
+        self.demo_quat = [traj[:, self.x_dim:] for traj in demo_trajs]
+        self.demo_vel = [self.compute_vel(traj) for traj in self.demo_pos]
         self.demo_trajs_flat = np.concatenate(demo_trajs, axis=0)
         self.demo_segment_idx = np.cumsum(
             [0] + [traj.shape[0] for traj in demo_trajs]
         )[:-1]
-        self.demo_vels = demo_vels
-        self.dt = dt
         self.switch = switch
         self.backtrack_steps = backtrack_steps
             
@@ -121,8 +120,8 @@ class DSPolicy:
         width_size = int(width_str)
         depth = int(depth_str)
         self.pos_model = train(
-            [traj[:, :self.x_dim] for traj in self.demo_trajs],
-            self.demo_vels,
+            self.demo_pos,
+            self.demo_vel,
             save_path,
             data_size=self.x_dim,
             batch_size=batch_size,
@@ -136,36 +135,14 @@ class DSPolicy:
         )
         self.pos_model.eval()
 
-    def pos_data_preprocess(self):
+    def compute_vel(self, x: np.ndarray):
         """
-        Process position data from demo trajectories to create position-velocity pairs for training.
-
-        Returns:
-            x: np.ndarray of shape (N, x_dim) containing positions
-            x_dot: np.ndarray of shape (N, x_dim) containing velocities
-            TODO: not used
+        Compute velocities from trajectories
         """
-        # Initialize lists to store positions and velocities
-        x_list = []
-        x_dot_list = []
+        x_dot = np.diff(x, axis=0) / self.dt
+        x_dot = np.vstack([x_dot, x_dot[-1]])
 
-        # Process each trajectory
-        for traj in self.demo_trajs:
-            # Extract positions (first x_dim components)
-            positions = traj[:, : self.x_dim]
-
-            # Compute velocities using finite differences
-            velocities = np.diff(positions, axis=0) / self.dt
-
-            # Add to lists (excluding last position since it has no velocity)
-            x_list.append(positions[:-1])
-            x_dot_list.append(velocities)
-
-        # Concatenate all positions and velocities
-        x = np.concatenate(x_list, axis=0)
-        x_dot = np.concatenate(x_dot_list, axis=0)
-
-        return x, x_dot
+        return x_dot
 
     def train_quat_model(self, save_path: str, k_init: int=10):
         quat_obj = quat_class(
