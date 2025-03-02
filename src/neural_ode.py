@@ -10,7 +10,6 @@ import functools as ft
 import cvxpy as cp
 import plotly.graph_objects as go
 from matplotlib.lines import Line2D
-from torchdiffeq import odeint_adjoint as odeint
 
 
 class NeuralODE(nn.Module):
@@ -58,7 +57,7 @@ class NeuralODE(nn.Module):
             if isinstance(m, nn.Linear):
                 nn.init.orthogonal_(m.weight)
     
-    def forward(self, x: np.ndarray):
+    def forward(self, x):
         """Predict velocity directly from position.
 
         Args:
@@ -67,7 +66,8 @@ class NeuralODE(nn.Module):
         Returns:
             3D velocity vector(s) with same shape as input
         """
-        x = torch.tensor(x, dtype=torch.float32)
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x, dtype=torch.float32)
             
         return self.mlp(x)
 
