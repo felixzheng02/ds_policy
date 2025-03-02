@@ -249,7 +249,7 @@ def load_data(input_opt):
             # Load EEF and handle trajectory data for first segment
             demo_num = str(l).zfill(2)
             # Get segment number from user
-            seg_num = "1".zfill(2)
+            seg_num = "0".zfill(2)
             eef_traj = np.load(
                 os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")
             )
