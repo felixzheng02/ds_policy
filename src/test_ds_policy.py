@@ -6,6 +6,7 @@ import utils
 from load_tools import load_data
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
+from scipy.spatial.transform import Rotation as R
 
 
 class Simulator:
@@ -18,7 +19,7 @@ class Simulator:
         self.traj.append(state.copy())
         for i in range(n_steps):
             quat = utils.euler_to_quat(state[3:])
-            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]))
+            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), alpha_V=20.0, lookahead=5)
             state += action * self.ds_policy.dt
             self.traj.append(state.copy())
         np.savez(
@@ -168,15 +169,22 @@ if __name__ == "__main__":
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
         ds_policy = DSPolicy(demo_trajs, dt=1/60)
-        ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width64_depth1.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
-        # ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width256_depth3.pt")
+        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width64_depth1.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
+        ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width128_depth3.pt")
         ds_policy.train_quat_model(
-            save_path="DS-Policy/models/quat_model.json", k_init=10
+            save_path="DS-Policy/models/quat_model.json", k_init=30
         )
         # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
+        # Randomly initialize starting point
+        rng = np.random.default_rng()
+        init_pos_x = rng.uniform(low=-0.3, high=0.3)  # Random x,y,z position
+        init_pos_y = rng.uniform(low=-0.4, high=-0.1)
+        init_pos_z = rng.uniform(low=-0.3, high=0.3)
+        init_quat = R.random().as_euler("xyz", degrees=False)
+        init_state = np.concatenate([np.array([init_pos_x, init_pos_y, init_pos_z]), init_quat])
         simulator.simulate(
-            np.array([0, -0.2, -0.1, 0, 0, 0], dtype=np.float64),
+            init_state,
             "DS-Policy/data/test_ds_policy.npz",
         )
     animate("DS-Policy/data/test_ds_policy.npz")

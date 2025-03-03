@@ -104,7 +104,7 @@ class DSPolicy:
         self.pos_model.load_state_dict(torch.load(model_path, weights_only=True))
         self.pos_model.eval()
     
-    def train_pos_model(self, save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-3, 1e-3), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100):
+    def train_pos_model(self, save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-4, 1e-5), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100):
         """
         Args:
             save_path: path to save the trained model
@@ -225,7 +225,7 @@ class DSPolicy:
 
         return p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att
 
-    def get_action(self, state: np.ndarray) -> np.ndarray:
+    def get_action(self, state: np.ndarray, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
         """
         Args:
             state: position + quaternion
@@ -233,7 +233,7 @@ class DSPolicy:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
 
-        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], alpha_V=50.0, lookahead=5)
+        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], alpha_V, lookahead)
         r_dot: np.ndarray = self.get_r_dot(state[self.x_dim : self.x_dim + self.r_dim])
         return np.concatenate([x_dot, r_dot])
 
