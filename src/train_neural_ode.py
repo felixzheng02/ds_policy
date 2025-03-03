@@ -311,7 +311,7 @@ def train(
 if __name__ == "__main__":
     width_size = 64
     depth = 3
-    model_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}.pt"
+    model_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_seg1.pt"
     x, x_dot, _ = load_data("custom")
     data_size = x[0].shape[-1]
 

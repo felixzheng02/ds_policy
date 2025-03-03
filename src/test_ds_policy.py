@@ -164,7 +164,7 @@ def animate(data_path: str, save_path: str = None):
 
 if __name__ == "__main__":
     if (
-        False
+        True
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
@@ -172,7 +172,7 @@ if __name__ == "__main__":
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width64_depth1.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
         ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width128_depth3.pt")
         ds_policy.train_quat_model(
-            save_path="DS-Policy/models/quat_model.json", k_init=30
+            save_path="DS-Policy/models/quat_model.json", k_init=10
         )
         # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
