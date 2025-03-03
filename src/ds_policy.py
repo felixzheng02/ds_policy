@@ -1,6 +1,7 @@
 import os
 import sys
 import logging
+import time
 
 # Import utility to disable JAX debug messages
 from disable_jax_logging import disable_jax_logging
@@ -9,6 +10,8 @@ from neural_ode import NeuralODE
 import numpy as np
 import torch
 from jaxopt import OSQP
+import jax
+import jax.numpy as jnp
 from scipy import sparse  # Add this import for sparse matrices
 # Add the quaternion_ds package to sys.path to import it
 sys.path.append(
@@ -31,6 +34,13 @@ from src.util.process_tools import (
     rollout_list,
 )
 
+qp = OSQP()
+@jax.jit
+def qp_solve(Q_opt, G_opt, h_opt):
+# Timer for QP solve
+    return qp.run(
+        params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)
+    ).params
 
 class DSPolicy:
     """
@@ -100,15 +110,24 @@ class DSPolicy:
         )
         
 
-    def load_pos_model(self, model_path: str):
-        model_name = os.path.basename(model_path)
-        width_str = model_name.split("width")[1].split("_")[0]
-        depth_str = model_name.split("depth")[1].split(".")[0]
+    def load_pos_model(self, pos_model_path: str):
+        pos_model_name = os.path.basename(pos_model_path)
+        width_str = pos_model_name.split("width")[1].split("_")[0]
+        depth_str = pos_model_name.split("depth")[1].split(".")[0]
         width_size = int(width_str)
         depth = int(depth_str)
         self.pos_model = NeuralODE(self.x_dim, width_size, depth)
-        self.pos_model.load_state_dict(torch.load(model_path, weights_only=True))
+        self.pos_model.load_state_dict(torch.load(pos_model_path, weights_only=True))
         self.pos_model.eval()
+
+        # pos_backtrack_model_name = os.path.basename(pos_backtrack_model_path)
+        # width_str = pos_backtrack_model_name.split("width")[1].split("_")[0]
+        # depth_str = pos_backtrack_model_name.split("depth")[1].split(".")[0]
+        # width_size = int(width_str)
+        # depth = int(depth_str)
+        # self.pos_backtrack_model = NeuralODE(self.x_dim, width_size, depth)
+        # self.pos_backtrack_model.load_state_dict(torch.load(pos_backtrack_model_path, weights_only=True))
+        # self.pos_backtrack_model.eval()
     
     def train_pos_model(self, save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-4, 1e-5), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100):
         """
@@ -140,20 +159,20 @@ class DSPolicy:
             print_every=print_every
         )
         self.pos_model.eval()
-        self.pos_backtrack_model = train(
-            self.demo_pos,
-            self.demo_vel,
-            save_path,
-            data_size=self.x_dim,
-            batch_size=batch_size,
-            lr_strategy=lr_strategy,
-            steps_strategy=steps_strategy,
-            length_strategy=length_strategy,
-            width_size=width_size,
-            depth=depth,
-            plot=plot,
-        )
-        self.pos_backtrack_model.eval()
+        # self.pos_backtrack_model = train(
+        #     [np.flip(pos, axis=0) for pos in self.demo_pos],
+        #     [np.flip(vel, axis=0) for vel in self.demo_vel],
+        #     save_path+"_backtrack",
+        #     data_size=self.x_dim,
+        #     batch_size=batch_size,
+        #     lr_strategy=lr_strategy,
+        #     steps_strategy=steps_strategy,
+        #     length_strategy=length_strategy,
+        #     width_size=width_size,
+        #     depth=depth,
+        #     plot=plot,
+        # )
+        # self.pos_backtrack_model.eval()
 
     def compute_vel(self, x: np.ndarray):
         """
@@ -245,7 +264,7 @@ class DSPolicy:
 
         return p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att
 
-    def get_action(self, state: np.ndarray, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
+    def get_action(self, state: np.ndarray, clf: bool=True, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
         """
         Args:
             state: position + quaternion
@@ -253,11 +272,11 @@ class DSPolicy:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
 
-        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], alpha_V, lookahead)
+        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], clf, alpha_V, lookahead)
         r_dot: np.ndarray = self.get_r_dot(state[self.x_dim : self.x_dim + self.r_dim])
         return np.concatenate([x_dot, r_dot])
 
-    def get_x_dot(self, x_state: np.ndarray, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
+    def get_x_dot(self, x_state: np.ndarray, clf: bool=True, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
         """
         Args:
             state: np.ndarray(n_dims)
@@ -266,17 +285,21 @@ class DSPolicy:
         Returns:
             x_dot: np.ndarray(dx, dy, dz)
         """
+        if not clf:
+            with torch.no_grad():
+                return self.pos_model.forward(torch.tensor(x_state, dtype=torch.float32)).numpy()
+        
         if self.switch or self.ref_traj_idx is None or self.ref_point_idx is None:
             self.ref_traj_idx, self.ref_point_idx = self.choose_traj(x_state)
         self.ref_point_idx = min(self.ref_point_idx+lookahead, self.demo_trajs[self.ref_traj_idx].shape[0] - 1)
-        qp = OSQP()
+
         x_dot, u_star = self.compute_clf(
             x_state,
             self.demo_trajs[self.ref_traj_idx][self.ref_point_idx][: self.x_dim],
-            qp,
             self.pos_model,
             alpha_V,
         )
+        
         return x_dot
 
     def get_r_dot(self, r_state: np.ndarray) -> np.ndarray:
@@ -286,45 +309,61 @@ class DSPolicy:
         Returns:
             r_dot: np.ndarray(droll, dpitch, dyaw)
         """
+        import time
+        start_time = time.time()
+        
+        # Timer for dimension check
         if self.r_dim == 0:
             return np.array([])
-
-        # Extract quaternion from state
+        
+        # Timer for quaternion extraction
+        quat_extract_start = time.time()
         q_curr = R.from_quat(r_state)
-
-        # Compute output using quaternion DS
+        quat_extract_time = time.time() - quat_extract_start
+        
+        # Timer for quaternion DS computation
+        quat_ds_start = time.time()
         _, _, omega = self.quat_model._step(q_curr, self.dt)
-
+        quat_ds_time = time.time() - quat_ds_start
+        
+        total_time = time.time() - start_time
+        # print(f"Rotation Timing - Total: {total_time:.6f}s, Quat Extract: {quat_extract_time:.6f}s, Quat DS: {quat_ds_time:.6f}s")
+        
         return omega
 
-    def compute_clf(self, current_state: np.ndarray, ref_state: np.ndarray, qp: OSQP, model: NeuralODE, alpha_V: float) -> tuple[np.ndarray, np.ndarray]:
-        # Compute tracking error
-        error = current_state - ref_state
-
-        # CLF (Control Lyapunov Function)
-        V = np.sum(np.square(error)) / 2
+    def compute_clf(self, current_state: np.ndarray, ref_state: np.ndarray, model: NeuralODE, alpha_V: float) -> tuple[np.ndarray, np.ndarray]:
+        
+        start_time = time.time()
 
         with torch.no_grad():
-            f_x: np.ndarray = model.forward(torch.tensor(current_state, dtype=torch.float32)).numpy()
-            f_xref: np.ndarray = model.forward(torch.tensor(ref_state, dtype=torch.float32)).numpy()
-        # f_xref = self.demo_vel[self.ref_traj_idx][self.ref_point_idx]
+            # Get nominal dynamics from neural ODE
+            f_x = jnp.array(model.forward(current_state))
+            f_xref = jnp.array(model.forward(ref_state))
+
+        error = jnp.array(current_state) - jnp.array(ref_state)
+
+        # CLF (Control Lyapunov Function)
+        V = jnp.sum(jnp.square(error)) / 2
+
         # Compute CLF derivative terms
-        s = np.dot(error, f_x - f_xref)
+        s = jnp.dot(error, f_x - f_xref)
 
         # QP parameters for CLF-based control
-        Q_opt = np.eye(3) # Cost on control input
+        Q_opt = jnp.eye(3)  # Cost on control input
         G_opt = 2 * error.reshape(1, -1)  # CLF derivative terms
-        h_opt = np.array([-alpha_V * V - 2 * s])  # CLF constraint
+        h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
+        
+        qp_solve_start = time.time()
+        u_star = qp_solve(Q_opt, G_opt, h_opt).primal.reshape(-1)
+        qp_solve_time = time.time() - qp_solve_start
 
-        sol = qp.run(
-            params_obj=(Q_opt, np.zeros(3)), params_ineq=(G_opt, h_opt)
-        ).params
-        u_star = sol.primal.reshape(-1)
-
-        # Apply control input and integrate dynamics
         x_dot = f_x + u_star
 
+        total_time = time.time() - start_time
+        print(f"CLF Timing - Total: {total_time:.6f}s, QP Solve: {qp_solve_time:.6f}s")
+
         return x_dot, u_star
+    
 
     def choose_traj(self, state: np.ndarray) -> tuple[int, int]:
         """

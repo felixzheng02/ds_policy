@@ -22,7 +22,7 @@ class Simulator:
             quat = utils.euler_to_quat(state[3:])
             action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), alpha_V=50.0, lookahead=5)
             self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
-            state += action * 0.005
+            state += action * 0.02
             self.traj.append(state.copy())
         np.savez(
             save_path,
@@ -182,8 +182,8 @@ if __name__ == "__main__":
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
         ds_policy = DSPolicy(demo_trajs, dt=1/60, switch=True)
-        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width64_depth1.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
-        ds_policy.load_pos_model(model_path="DS-Policy/models/mlp_width128_depth3.pt")
+        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
+        ds_policy.load_pos_model(pos_model_path="DS-Policy/models/mlp_width128_depth3.pt")
         ds_policy.train_quat_model(
             save_path="DS-Policy/models/quat_model.json", k_init=10
         )
@@ -191,16 +191,18 @@ if __name__ == "__main__":
         simulator = Simulator(ds_policy)
         # Randomly initialize starting point
         # Set random seed for reproducibility
-        rng = np.random.default_rng(seed=8)
+        rng = np.random.default_rng(seed=3)
         init_pos_x = rng.uniform(low=-0.3, high=0.3)  # Random x,y,z position
         init_pos_y = rng.uniform(low=-0.4, high=-0.1)
         init_pos_z = rng.uniform(low=-0.3, high=0.3)
-        init_quat = R.random().as_euler("xyz", degrees=False)
+        # Set the same random seed for quaternion initialization to ensure reproducibility
+        quat_rng = np.random.RandomState(seed=4)
+        init_quat = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
         init_state = np.concatenate([np.array([init_pos_x, init_pos_y, init_pos_z]), init_quat])
         simulator.simulate(
             init_state,
             "DS-Policy/data/test_ds_policy.npz",
-            n_steps=200
+            n_steps=500
         )
     save_path = "DS-Policy/data/test_ds_policy_no_switch_no_backtrack.mp4"
     animate("DS-Policy/data/test_ds_policy.npz", None)
