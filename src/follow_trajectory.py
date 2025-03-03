@@ -10,6 +10,9 @@ import matplotlib.animation as animation
 import os
 import sys
 
+# Import utility to disable JAX debug messages
+from disable_jax_logging import disable_jax_logging
+
 # Add the root directory to Python path
 root_dir = os.path.abspath(os.path.dirname(__file__))
 sys.path.append(root_dir)

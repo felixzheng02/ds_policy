@@ -10,6 +10,7 @@ import functools as ft
 import cvxpy as cp
 import plotly.graph_objects as go
 from matplotlib.lines import Line2D
+from scipy.integrate import odeint
 
 
 class NeuralODE(nn.Module):
@@ -71,66 +72,54 @@ class NeuralODE(nn.Module):
 
         return self.mlp(x)
 
+class NeuralODEWrapper(nn.Module):
+    """
+    Wrapper for NeuralODE for simulation.
 
-# class NeuralODE_rot(nn.Module):
-#     """
-#     Neural ODE model for 3D trajectories.
+    """
 
-#     This class wraps the velocity prediction network and provides methods for both:
-#     1. Direct velocity prediction
-#     2. Trajectory generation through ODE integration
+    def __init__(self, data_size, width_size, depth, **kwargs):
+        super(NeuralODEWrapper, self).__init__()
+        self.neural_ode = NeuralODE(data_size, width_size, depth)
 
-#     Parameters:
-#         data_size: Dimension of input state (3 for position)
-#         width_size: Width of hidden layers in Func network
-#         depth: Number of hidden layers in Func network
-#     """
+    def predict_velocity(self, x: np.ndarray):
+        """Predict velocity directly from position without ODE integration."""
+        return self.neural_ode.forward(x)
 
-#     def __init__(self, data_size, width_size, depth, **kwargs):
-#         super(NeuralODE_rot, self).__init__()
-#         self.func_rot = NeuralODE(data_size, width_size, depth)
+    def generate_trajectory(self, ts, y0):
+        """
+        Generate a trajectory by solving the ODE.
 
-#     def predict_velocity(self, x: np.ndarray):
-#         """Predict velocity directly from position without ODE integration."""
-#         return self.func_rot.forward(x)
+        Args:
+            ts: Time points to evaluate trajectory at
+            y0: Initial 3D position
 
-#     def generate_trajectory(self, ts, y0):
-#         """
-#         Generate a trajectory by solving the ODE.
+        Returns:
+            Position trajectory evaluated at specified timepoints
+        """
+        # Convert inputs to torch tensors if they aren't already
+        if not isinstance(ts, torch.Tensor):
+            ts = torch.tensor(ts, dtype=torch.float32)
+        if not isinstance(y0, torch.Tensor):
+            y0 = torch.tensor(y0, dtype=torch.float32)
 
-#         Args:
-#             ts: Time points to evaluate trajectory at
-#             y0: Initial 3D position
+        # Make sure y0 has the right shape
+        if y0.ndim == 1:
+            y0 = y0.unsqueeze(0)  # Add batch dimension
 
-#         Returns:
-#             Position trajectory evaluated at specified timepoints
-#         """
-#         # Convert inputs to torch tensors if they aren't already
-#         if not isinstance(ts, torch.Tensor):
-#             ts = torch.tensor(ts, dtype=torch.float32)
-#         if not isinstance(y0, torch.Tensor):
-#             y0 = torch.tensor(y0, dtype=torch.float32)
+        # Solve ODE
+        solution = odeint(
+            self.neural_ode,
+            y0,
+            ts,
+            method='dopri5',
+            rtol=1e-3,
+            atol=1e-6,
+            options={'max_num_steps': 4000}
+        )
 
-#         # Make sure y0 has the right shape
-#         if y0.ndim == 1:
-#             y0 = y0.unsqueeze(0)  # Add batch dimension
+        return solution
 
-#         # Solve ODE
-#         solution = odeint(
-#             self.func_rot,
-#             y0,
-#             ts,
-#             method='dopri5',
-#             rtol=1e-3,
-#             atol=1e-6,
-#             options={'max_num_steps': 4000}
-#         )
-
-#         # Rearrange dimensions to match expected output shape: (time, batch, state)
-#         solution = solution.permute(0, 1, 2) if solution.ndim == 3 else solution
-
-#         return solution
-
-#     def forward(self, ts, y0):
-#         """Default to trajectory generation when called directly."""
-#         return self.generate_trajectory(ts, y0)
+    def forward(self, ts, y0):
+        """Default to trajectory generation when called directly."""
+        return self.generate_trajectory(ts, y0)

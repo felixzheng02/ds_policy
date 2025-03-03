@@ -1,5 +1,10 @@
 import os
 import sys
+import logging
+
+# Import utility to disable JAX debug messages
+from disable_jax_logging import disable_jax_logging
+
 from neural_ode import NeuralODE
 import numpy as np
 import torch
@@ -88,6 +93,7 @@ class DSPolicy:
         self.ref_point_idx = None
 
         self.pos_model = None
+        self.pos_backtrack_model = None
         self.quat_model = None
         self.p_in, self.q_in, self.p_out, self.q_out, self.p_init, self.q_init, self.p_att, self.q_att = (
             self.quad_data_preprocess(demo_trajs)
@@ -134,6 +140,20 @@ class DSPolicy:
             print_every=print_every
         )
         self.pos_model.eval()
+        self.pos_backtrack_model = train(
+            self.demo_pos,
+            self.demo_vel,
+            save_path,
+            data_size=self.x_dim,
+            batch_size=batch_size,
+            lr_strategy=lr_strategy,
+            steps_strategy=steps_strategy,
+            length_strategy=length_strategy,
+            width_size=width_size,
+            depth=depth,
+            plot=plot,
+        )
+        self.pos_backtrack_model.eval()
 
     def compute_vel(self, x: np.ndarray):
         """
@@ -287,7 +307,7 @@ class DSPolicy:
         with torch.no_grad():
             f_x: np.ndarray = model.forward(torch.tensor(current_state, dtype=torch.float32)).numpy()
             f_xref: np.ndarray = model.forward(torch.tensor(ref_state, dtype=torch.float32)).numpy()
-
+        # f_xref = self.demo_vel[self.ref_traj_idx][self.ref_point_idx]
         # Compute CLF derivative terms
         s = np.dot(error, f_x - f_xref)
 
