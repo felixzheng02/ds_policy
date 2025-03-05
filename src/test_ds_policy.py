@@ -20,7 +20,7 @@ class Simulator:
         self.traj.append(state.copy())
         for i in range(n_steps):
             quat = utils.euler_to_quat(state[3:])
-            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), alpha_V=50.0, lookahead=5)
+            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), alpha_V=100.0, lookahead=5)
             self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
             state += action * 0.02
             self.traj.append(state.copy())
@@ -181,7 +181,7 @@ if __name__ == "__main__":
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
         x, x_dot, r = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
-        ds_policy = DSPolicy(demo_trajs, dt=1/60, switch=True)
+        ds_policy = DSPolicy(demo_trajs, dt=1/60, switch=False)
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
         ds_policy.load_pos_model(pos_model_path="DS-Policy/models/mlp_width128_depth3.pt")
         ds_policy.train_quat_model(
@@ -198,7 +198,7 @@ if __name__ == "__main__":
         # Set the same random seed for quaternion initialization to ensure reproducibility
         quat_rng = np.random.RandomState(seed=4)
         init_quat = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
-        init_state = np.concatenate([np.array([init_pos_x, init_pos_y, init_pos_z]), init_quat])
+        init_state = np.concatenate([np.array([-0.15661161, -0.12824412, -0.34663675]), init_quat])
         simulator.simulate(
             init_state,
             "DS-Policy/data/test_ds_policy.npz",
