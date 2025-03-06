@@ -3,6 +3,7 @@ import numpy as np
 import pyLasaDataset as lasa
 from scipy.io import loadmat
 from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import RotationSpline as RS
 
 
 def load_data(input_opt):
@@ -290,61 +291,61 @@ def load_data(input_opt):
                 rot_traj[i] = handle_rot_init.T @ eef_rot[i]
 
             # Convert rotation matrices to quaternions
-            quat_traj = np.array([R.from_matrix(rot).as_quat() for rot in rot_traj])
-
+            quat_traj_scipy = R.from_matrix(rot_traj)
+            quat_traj = quat_traj_scipy.as_quat()
             # Compute velocities
             dt = 1 / 60
             vel_traj = np.diff(pos_traj, axis=0) / dt
-            # velocity already computed in after transformed frame, so no need to transform
-            # for i in range(len(vel_traj)):
-            #     # Transform velocity to initial handle frame
-            #     vel_traj[i] = handle_rot_init.T @ vel_traj[i]
             vel_traj = np.vstack([vel_traj, vel_traj[-1]])
+
+            # compute angular velocity
+            # do finite difference of quat_traj
+            ang_vel_traj = np.zeros((len(quat_traj_scipy), 3))
+            time_vec = np.arange(len(quat_traj_scipy)) * dt
+            rs = RS(time_vec, quat_traj_scipy)
+            ang_vel_traj = rs(time_vec, 1)
+            # convert quat to euler angle plot derivative as arrows to make sure it is correct
+            # plot euler_traj and ang_vel_traj_euler
+            debug_on = False
+            if debug_on:
+                euler_traj = quat_traj_scipy.as_euler('xyz', degrees=False)
+                ang_vel_traj_euler = np.diff(euler_traj, axis=0) / dt
+                import matplotlib.pyplot as plt
+                fig, axs = plt.subplots(2, 3, figsize=(12, 8))
+                axs[0, 0].plot(ang_vel_traj[:, 0])
+                axs[0, 0].set_title('Angular Velocity X')
+                axs[0, 0].set_ylabel('Angular Velocity (rad/s)')
+                axs[0, 1].plot(ang_vel_traj[:, 1])
+                axs[0, 1].set_title('Angular Velocity Y') 
+                axs[0, 2].plot(ang_vel_traj[:, 2])
+                axs[0, 2].set_title('Angular Velocity Z')
+                
+                axs[1, 0].plot(ang_vel_traj_euler[:, 0])
+                axs[1, 0].set_title('Euler Angular Velocity X')
+                axs[1, 0].set_xlabel('Time Step')
+                axs[1, 0].set_ylabel('Angular Velocity (rad/s)')
+                axs[1, 1].plot(ang_vel_traj_euler[:, 1])
+                axs[1, 1].set_title('Euler Angular Velocity Y')
+                axs[1, 1].set_xlabel('Time Step')
+                axs[1, 2].plot(ang_vel_traj_euler[:, 2])
+                axs[1, 2].set_title('Euler Angular Velocity Z')
+                axs[1, 2].set_xlabel('Time Step')
+                
+                plt.tight_layout()
+                plt.show()
 
             # Store trajectories
             if l == 0:
                 x = [pos_traj]
                 x_dot = [vel_traj]
                 quat_traj_all = [quat_traj]
+                ang_vel_traj_all = [ang_vel_traj]
             else:
                 x.append(pos_traj)
                 x_dot.append(vel_traj)
                 quat_traj_all.append(quat_traj)
-        # # Visualize trajectories and velocities in 3D
-        # import matplotlib.pyplot as plt
-        # from mpl_toolkits.mplot3d import Axes3D
-
-        # fig = plt.figure(figsize=(10, 8))
-        # ax = fig.add_subplot(121, projection='3d')
-        # ax2 = fig.add_subplot(122, projection='3d')
-
-        # # Plot each trajectory
-        # for pos_traj, vel_traj, quat_traj in zip(x, x_dot, quat_traj_all):
-        #     # Plot position trajectory
-        #     ax.plot(pos_traj[:, 0], pos_traj[:, 1], pos_traj[:, 2], 'b-', label='Trajectory')
-
-        #     # Plot initial point with big dot
-        #     ax.scatter(pos_traj[0, 0], pos_traj[0, 1], pos_traj[0, 2],
-        #               color='red', s=100, label='Initial Point')
-
-        #     # Plot velocity arrows (every 30 points to avoid clutter)
-        #     stride = 30
-        #     for i in range(0, len(pos_traj), stride):
-        #         ax.quiver(pos_traj[i, 0], pos_traj[i, 1], pos_traj[i, 2],
-        #                  vel_traj[i, 0], vel_traj[i, 1], vel_traj[i, 2],
-        #                  color='blue', alpha=0.6, length=0.05, normalize=False)
-        #     ax2.scatter3D(quat_traj[:, 0], quat_traj[:, 1], quat_traj[:, 2])
-        #     # plot the last point of quat_traj
-        #     ax2.scatter3D(quat_traj[-1, 0], quat_traj[-1, 1], quat_traj[-1, 2], color='red', s=100)
-
-        # ax.set_xlabel('X')
-        # ax.set_ylabel('Y')
-        # ax.set_zlabel('Z')
-        # ax.set_title('Relative EEF-Handle Trajectories with Velocities')
-        # plt.show()
-        # Process both trajectory sets
-        # x, x_dot, x_att, x_init = _pre_process(x, x_dot)
-        return x, x_dot, quat_traj_all
+                ang_vel_traj_all.append(ang_vel_traj)
+        return x, x_dot, quat_traj_all, ang_vel_traj_all
 
     else:
         input_path = os.path.join(input_opt, "all.npz")

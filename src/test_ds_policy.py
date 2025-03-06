@@ -179,7 +179,7 @@ if __name__ == "__main__":
     if (
         True
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
-        x, x_dot, r = load_data("custom")
+        x, x_dot, r, ang_vel_traj_all = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, r)]
         ds_policy = DSPolicy(demo_trajs, dt=1/60, switch=False)
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
