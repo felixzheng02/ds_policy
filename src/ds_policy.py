@@ -289,8 +289,7 @@ class DSPolicy:
             with torch.no_grad():
                 return self.pos_model.forward(torch.tensor(x_state, dtype=torch.float32)).numpy()
         
-        if self.switch or self.ref_traj_idx is None or self.ref_point_idx is None:
-            self.ref_traj_idx, self.ref_point_idx = self.choose_traj(x_state)
+        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(x_state, self.switch)
         self.ref_point_idx = min(self.ref_point_idx+lookahead, self.demo_trajs[self.ref_traj_idx].shape[0] - 1)
 
         x_dot, u_star = self.compute_clf(
@@ -360,35 +359,40 @@ class DSPolicy:
         x_dot = f_x + u_star
 
         total_time = time.time() - start_time
-        print(f"CLF Timing - Total: {total_time:.6f}s, QP Solve: {qp_solve_time:.6f}s")
+        # print(f"CLF Timing - Total: {total_time:.6f}s, QP Solve: {qp_solve_time:.6f}s")
 
         return x_dot, u_star
     
 
-    def choose_traj(self, state: np.ndarray) -> tuple[int, int]:
+    def choose_ref(self, state: np.ndarray, switch: bool=False) -> tuple[int, int]:
         """
-        Choose trajectory index based on state.
+        Choose ref_traj_idx and ref_point_idx based on state.
         TODO: for now uses Euclidean distance.
         Args:
             state: np.ndarray(n_dims)
+            switch: bool, if False, sticks to the current trajectory
         Returns:
-            traj_idx: int
+            ref_traj_idx: int
             point_idx within the traj: int
         """
-        # Compute Euclidean distances between state and all points in flattened trajectories
-        distances = np.sqrt(
-            np.sum((self.demo_trajs_flat[:, : self.x_dim] - state) ** 2, axis=1)
-        )
-        # Find the index of the closest point in flattened trajectories
-        closest_idx = np.argmin(distances)
-        # Determine which trajectory the closest point belongs to
-        traj_idx = (
-            np.searchsorted(self.demo_segment_idx, closest_idx, side="right") - 1
-        )
-        # Compute point index within the chosen trajectory
-        if traj_idx == 0:
-            point_idx = closest_idx
+        if switch or self.ref_traj_idx is None or self.ref_point_idx is None:
+            distances = np.sqrt(
+                np.sum((self.demo_trajs_flat[:, : self.x_dim] - state) ** 2, axis=1)
+            )
+            # Find the index of the closest point in flattened trajectories
+            closest_idx = np.argmin(distances)
+            # Determine which trajectory the closest point belongs to
+            traj_idx = (
+                np.searchsorted(self.demo_segment_idx, closest_idx, side="right") - 1
+            )
+            # Compute point index within the chosen trajectory
+            if traj_idx == 0:
+                point_idx = closest_idx
+            else:
+                point_idx = closest_idx - self.demo_segment_idx[traj_idx]
         else:
-            point_idx = closest_idx - self.demo_segment_idx[traj_idx]
+            traj_idx = self.ref_traj_idx
+            distances = np.sqrt(np.sum((self.demo_trajs[self.ref_traj_idx][:, :self.x_dim] - state) ** 2, axis=1))
+            point_idx = np.argmin(distances)
 
         return int(traj_idx), int(point_idx)
