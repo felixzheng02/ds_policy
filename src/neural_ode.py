@@ -16,13 +16,13 @@ from scipy.integrate import odeint
 class NeuralODE(nn.Module):
     """Neural ODE function for 3D translational dynamics.
 
-    This class defines a neural network that learns to predict velocities from positions.
-    The model takes in a 3D position vector and outputs 3D velocity.
+    This class defines a neural network that learns to predict translational and rotational velocities from positions and quaternions.
+    The model takes in a 7D state vector and outputs 7D vector field.
 
     Structure:
-    - Input: 3D state vector [position (3D)]
+    - Input: 7D state vector [position (3D), quaternion (4D)]
     - MLP: Maps state to velocities
-    - Output: 3D vector field [translational velocity (3D)]
+    - Output: 7D vector field [translational velocity (3D), rotational velocity (4D)]
     """
 
     def __init__(self, data_size: int, width_size: int, depth: int, **kwargs):
@@ -34,6 +34,13 @@ class NeuralODE(nn.Module):
             depth: Number of hidden layers
         """
         super(NeuralODE, self).__init__()
+
+        if data_size == 3: # only position
+            output_size = 3
+        elif data_size == 7: # position and quaternion
+            output_size = 6 # x_dot, omega
+        else:
+            raise ValueError(f"Invalid data size: {data_size}")
 
         # Create a list to hold all layers
         layers = []
@@ -48,7 +55,7 @@ class NeuralODE(nn.Module):
             layers.append(nn.Tanh())
 
         # Output layer
-        layers.append(nn.Linear(width_size, data_size))
+        layers.append(nn.Linear(width_size, output_size))
 
         # Combine all layers into a sequential model
         self.mlp = nn.Sequential(*layers)
@@ -62,10 +69,10 @@ class NeuralODE(nn.Module):
         """Predict velocity directly from position.
 
         Args:
-            x: Current 3D position(s). Can be of size (3,) or (N, 3)
+            x: Current state vector(s). Can be of either 3D or 7D.
 
         Returns:
-            3D velocity vector(s) with same shape as input
+            3D or 6D velocity
         """
         if isinstance(x, np.ndarray):
             x = torch.tensor(x, dtype=torch.float32)
@@ -75,7 +82,7 @@ class NeuralODE(nn.Module):
 class NeuralODEWrapper(nn.Module):
     """
     Wrapper for NeuralODE for simulation.
-
+    TODO: not used
     """
 
     def __init__(self, data_size, width_size, depth, **kwargs):

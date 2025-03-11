@@ -14,7 +14,6 @@ from neural_ode import NeuralODE
 def plot_vector_field(
     model_path: str,
     demo_trajs: list[np.ndarray],
-    data_size: int,
     width_size: int,
     depth: int,
     save_path: str = None,
@@ -25,8 +24,14 @@ def plot_vector_field(
     Args:
         model_path: Path to the saved model file
         demo_trajs: Training trajectory data
+        width_size: Width of hidden layers
+        depth: Number of hidden layers
         save_path: Path to save the plot
     """
+    data_size = demo_trajs[0].shape[-1]
+    if data_size == 7:
+        print("plot_vector_field only works for position data")
+        return
     model = NeuralODE(data_size, width_size, depth)
     model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
@@ -127,7 +132,6 @@ def rollout_trajectory(
     model_path: str,
     demo_trajs: list[np.ndarray],
     init_point: np.ndarray,
-    data_size: int,
     width_size: int,
     depth: int,
     dt: float = 0.01,
@@ -139,10 +143,18 @@ def rollout_trajectory(
 
     Args:
         model_path: Path to the saved model file
-        x: Training data to determine bounds for random initialization
+        demo_trajs: Training trajectory data
+        init_point: Initial point for the trajectory
+        width_size: Width of hidden layers
+        depth: Number of hidden layers
+        dt: Time step
         n_steps: Number of time steps to simulate
-        show: Whether to display the plot (True) or save it (False)
+        save_path: Path to save the plot
     """
+    data_size = demo_trajs[0].shape[-1]
+    if data_size == 7:
+        print("rollout_trajectory only works for position data")
+        return
     model = NeuralODE(data_size, width_size, depth)
     model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
@@ -232,8 +244,7 @@ def rollout_trajectory(
 def train(
     x: list[np.ndarray],
     x_dot: list[np.ndarray],
-    save_path: str,
-    data_size: int = 3,
+    save_path: str = None,
     batch_size: int = 1,  # TODO: not used
     lr_strategy: tuple = (1e-3, 1e-3, 1e-3),
     steps_strategy: tuple = (5000, 5000, 5000),
@@ -243,6 +254,31 @@ def train(
     plot: bool = False,
     print_every: int = 100,
 ):
+    """
+    Train the NeuralODE model.
+
+    Args:
+        x: Training data. Each array can be of size (N, 3) or (N, 7).
+        x_dot: Training velocity data. Each array can be of size (N, 3) or (N, 6).
+        save_path: Path to save the trained model
+        batch_size: Number of trajectories to train on at a time
+        lr_strategy: Learning rate in each phase
+        steps_strategy: Number of steps in each phase
+        length_strategy: Fraction of the trajectories available for training in each phase
+        width_size: Width of hidden layers
+        depth: Number of hidden layers
+        plot: Whether to plot the training progress
+        print_every: Print the training progress every print_every steps
+    """
+    data_size = x[0].shape[-1]
+    if save_path is None:
+        if data_size == 3:
+            save_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos.pt"
+        elif data_size == 7:
+            save_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos_quat.pt"
+        else:
+            raise ValueError(f"Invalid data size: {data_size}")
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     x_flat = np.concatenate(x, axis=0)
@@ -284,26 +320,53 @@ def train(
 
     if plot:
         # Plot velocity predictions vs actual for each trajectory
-        plt.figure(figsize=(15, 5))
-
-        # Get velocity predictions for all trajectories
         model.eval()
         with torch.no_grad():
             v_pred = model.forward(x_flat_tensor)
 
         v_pred_np = v_pred.numpy()
-
-        # Plot average velocity components across all trajectories
-        for i, comp in enumerate(["x", "y", "z"]):
-            plt.subplot(1, 3, i + 1)
-            plt.plot(x_dot_flat[:, i], label=f"Real d{comp}/dt")
-            plt.plot(v_pred_np[:, i], "--", label=f"Pred d{comp}/dt")
-            plt.legend()
-            plt.title(f"{comp} velocity component (mean across trajectories)")
-
-        plt.tight_layout()
-        plt.show()
-        plt.close()
+        
+        # Determine if we're dealing with position only or position+quaternion
+        if data_size == 3:  # Position only - plot translational velocity
+            plt.figure(figsize=(15, 5))
+            # Plot translational velocity components
+            for i, comp in enumerate(["x", "y", "z"]):
+                plt.subplot(1, 3, i + 1)
+                plt.plot(x_dot_flat[:, i], label=f"Real d{comp}/dt")
+                plt.plot(v_pred_np[:, i], "--", label=f"Pred d{comp}/dt")
+                plt.legend()
+                plt.title(f"{comp} translational velocity")
+            
+            plt.tight_layout()
+            plt.show()
+            plt.close()
+            
+        elif data_size == 7:  # Position + quaternion - plot both translational and angular velocity
+            # First figure: Translational velocity (first 3 components)
+            plt.figure(figsize=(15, 5))
+            for i, comp in enumerate(["x", "y", "z"]):
+                plt.subplot(1, 3, i + 1)
+                plt.plot(x_dot_flat[:, i], label=f"Real d{comp}/dt")
+                plt.plot(v_pred_np[:, i], "--", label=f"Pred d{comp}/dt")
+                plt.legend()
+                plt.title(f"{comp} translational velocity")
+            
+            plt.tight_layout()
+            plt.show()
+            plt.close()
+            
+            # Second figure: Angular velocity (last 3 components)
+            plt.figure(figsize=(15, 5))
+            for i, comp in enumerate(["x", "y", "z"]):
+                plt.subplot(1, 3, i + 1)
+                plt.plot(x_dot_flat[:, i+3], label=f"Real ω_{comp}")
+                plt.plot(v_pred_np[:, i+3], "--", label=f"Pred ω_{comp}")
+                plt.legend()
+                plt.title(f"{comp} angular velocity")
+            
+            plt.tight_layout()
+            plt.show()
+            plt.close()
 
     return model
 
@@ -312,15 +375,12 @@ if __name__ == "__main__":
     width_size = 64
     depth = 3
     model_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_seg1.pt"
-    x, x_dot, _ = load_data("custom")
-    data_size = x[0].shape[-1]
+    x, x_dot, quat, omega = load_data("custom")
 
     if True:
         model = train(
-            x,
-            x_dot,
-            save_path=model_path,
-            data_size=data_size,
+            [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))],
+            [np.concatenate([x_dot[i], omega[i]], axis=-1) for i in range(len(x_dot))],
             batch_size=1,
             lr_strategy=(1e-3, 1e-4, 1e-5),
             steps_strategy=(100, 100, 100),
@@ -331,10 +391,10 @@ if __name__ == "__main__":
             print_every=100,
         )
 
-    if True:
+    if False:
         plot_vector_field(model_path, x, data_size, width_size, depth)
 
-    if True:
+    if False:
         rollout_trajectory(
             model_path, x, np.array([0, -0.2, -0.2]), data_size, width_size, depth
         )
