@@ -330,13 +330,13 @@ class DSPolicy:
         ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
         ref_state = np.concatenate([ref_x, ref_quat])
 
-        # if self.model is None: # pos_model and quat_model are separate, only apply to pos_model
-        if True: # TODO   
+        if self.model is None: # pos_model and quat_model are separate, only apply to pos_model
+        # if True: # TODO
             current_x = current_state[:self.x_dim]
             f_x = action_from_model[:self.x_dim]
             with torch.no_grad():
-                # f_xref = jnp.array(self.pos_model.forward(ref_x))
-                f_xref = jnp.array(self.model.forward(ref_state))[:self.x_dim] # TODO
+                f_xref = jnp.array(self.pos_model.forward(ref_x)) # TODO
+                # f_xref = jnp.array(self.model.forward(ref_state))[:self.x_dim]
 
             error = jnp.array(current_x) - jnp.array(ref_x)
 
@@ -377,17 +377,20 @@ class DSPolicy:
             # Lyapunov function (quadratic in the error)
             V = jnp.sum(jnp.square(2*err))/4
             # Get nominal dynamics from the learned model
-            with torch.no_grad():
-                vel = jnp.array(self.model.forward(current_state).reshape((-1,1)))
+            vel = jnp.array(action_from_model).reshape((-1,1))
+
             vel_pos = vel[:3]  # Position dynamics
 
             # Angular velocity from the model
             vel_ang = vel[3:].reshape((-1,1))
             vel_ang_quat = jnp.vstack((0.0, vel_ang))  # Prepend 0 for quaternion multiplication
 
-            # Get reference dynamics
+            # Get reference dynamics TODO
+            # with torch.no_grad():
+            #     vel_ref = jnp.array(self.model.forward(ref_state)).reshape((-1,1))
+            # vel_pos_ref = vel_ref[:3].reshape((-1,1))
+            # vel_ang_ref = vel_ref[3:].reshape((-1,1))
             vel_pos_ref = jnp.array(self.x_dot[self.ref_traj_idx][self.ref_point_idx]).reshape((-1,1))
-
             vel_ang_ref = jnp.array(self.omega[self.ref_traj_idx][self.ref_point_idx]).reshape((-1,1))
             vel_ang_quat_ref = jnp.vstack((0.0, vel_ang_ref))  # Prepend 0 for quaternion multiplication
 
@@ -423,7 +426,7 @@ class DSPolicy:
             u_ang_quat = jnp.vstack((0.0, ustar[3:]))
 
             # Compute state derivatives with the control inputs
-            p_dot = vel_pos + u_pos  # Position derivative
+            p_dot = 0.1*vel_pos + u_pos  # Position derivative
             q_dot = 0.5*quat_mult(vel_ang_quat[:, 0] + u_ang_quat[:, 0], quat).reshape((-1,1))
 
             q_dot_Quat = Quaternion(q_dot[0][0], q_dot[1:].reshape(-1))

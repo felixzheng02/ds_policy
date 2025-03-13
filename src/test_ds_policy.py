@@ -20,7 +20,7 @@ class Simulator:
         self.traj.append(state.copy())
         for i in range(n_steps):
             quat = utils.euler_to_quat(state[3:])
-            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), clf=clf, alpha_V=10.0, lookahead=5)
+            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), clf=clf, alpha_V=1, lookahead=5)
             if clf:
                 self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
             state += action * 0.02
@@ -185,10 +185,10 @@ if __name__ == "__main__":
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         ds_policy = DSPolicy(x, x_dot, q, omega, dt=1/60, switch=False)
         # ds_policy.train_model(save_path="DS-Policy/models/mlp_width256_depth6_pos_quat.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=True)
-        ds_policy.load_model(model_path="DS-Policy/models/mlp_width256_depth5_test.pt")
+        # ds_policy.load_model(model_path="DS-Policy/models/mlp_width256_depth5_test.pt")
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
-        # ds_policy.load_pos_model(pos_model_path="DS-Policy/models/mlp_width128_depth3.pt")
-        # ds_policy.train_quat_model(save_path="DS-Policy/models/quat_model.json", k_init=10)
+        ds_policy.load_pos_model(pos_model_path="DS-Policy/models/mlp_width128_depth3.pt")
+        ds_policy.train_quat_model(save_path="DS-Policy/models/quat_model.json", k_init=10)
         # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
         # Randomly initialize starting point
@@ -202,7 +202,7 @@ if __name__ == "__main__":
         init_quat = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
         init_state = np.concatenate([np.array([-0.15661161, -0.12824412, -0.34663675]), init_quat])
         simulator.simulate(
-            np.concatenate([x[0][0], utils.quat_to_euler(q[0][0])]),
+            np.concatenate([x[1][0], utils.quat_to_euler(q[1][0])]),
             "DS-Policy/data/test_ds_policy.npz",
             n_steps=100,
             clf=True
