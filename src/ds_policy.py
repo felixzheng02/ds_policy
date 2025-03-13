@@ -13,6 +13,12 @@ from jaxopt import OSQP
 import jax
 import jax.numpy as jnp
 from scipy import sparse  # Add this import for sparse matrices
+import json
+from scipy.spatial.transform import Rotation as R
+
+from train_neural_ode import train
+from utils import quat_mult, Quaternion
+
 # Add the quaternion_ds package to sys.path to import it
 sys.path.append(
     os.path.join(
@@ -20,11 +26,6 @@ sys.path.append(
         "se3_lpvds/src/quaternion_ds",
     )
 )
-
-import json
-
-from train_neural_ode import train
-from scipy.spatial.transform import Rotation as R
 from src.gmm_class import gmm_class
 from src.quat_class import quat_class
 from src.util.process_tools import (
@@ -34,67 +35,54 @@ from src.util.process_tools import (
     rollout_list,
 )
 
+
 qp = OSQP()
 @jax.jit
 def qp_solve(Q_opt, G_opt, h_opt):
-# Timer for QP solve
     return qp.run(
         params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)
     ).params
 
 class DSPolicy:
     """
-    __init__(model_path: str,
-        demo_trajs: List[np.ndarray(n_steps, n_dim=x_dim+r_dim)],
-        dt: float,
-        switch: bool,
-        backtrack_steps: int)
-    NOTE: either load_pos_model or train_pos_model should be called before get_action
-    train_pos_model(save_path: str, 
-        batch_size: int=1, 
-        lr_strategy: tuple=(1e-3, 1e-3, 1e-3), 
-        steps_strategy: tuple=(5000, 5000, 5000), 
-        length_strategy: tuple=(0.4, 0.7, 1), 
-        plot: bool=True, 
-        print_every: int=100)
-    load_pos_model(model_path: str)
-    NOTE: either train_quat_model or load_quat_model should be called before get_action
-    train_quat_model(save_path: str, k_init: int=10)
-    load_quat_model(model_path: str)
+    NOTE: train_model/load_model uses a neural ODE for both position and orientation.
+          train_pos_model/load_pos_model uses a neural ODE for position only.
+          train_quat_model/load_quat_model uses a SE3 LPVDS for orientation only.
+          Both position and orientation models have to be trained/loaded before get_action
     get_action(state: np.ndarray(n_dims)) -> (dx, dy, dz, droll, dpitch, dyaw)
     """
 
     def __init__(
         self,
-        demo_trajs: list[np.ndarray],
+        x: list[np.ndarray],
+        x_dot: list[np.ndarray],
+        quat: list[np.ndarray],
+        omega: list[np.ndarray],
         dt: float=0.01,
         switch: bool=False,
         backtrack_steps: int=0
     ):
         """
         Args:
-            demo_trajs: List of demo trajectories [np.ndarray(n_steps, n_dim=x_dim+r_dim)]. Assume n_steps can vary, n_dim is fixed.
-            pos_model_path: String of NODE model file path
-            quat_model_path: String of quaternion model file path
+            x: list of position trajectories
+            x_dot: list of velocity trajectories
+            quat: list of quaternion trajectories
+            omega: list of angular velocity trajectories
             dt: Time step
             switch: If True, allows switching between trajectories at runtime. If False, sticks to initially chosen trajectory.
             backtrack_steps: Number of steps to backtrack on collision
-            key: jax.random.PRNGKey
         """
-        if demo_trajs[0].shape[1] == 7:  # quaternion
-            self.x_dim = 3
-            self.r_dim = 4
-        else:
-            raise ValueError(f"Invalid demo trajectory shape: {demo_trajs[0].shape}")
-        
+        self.x_dim = 3
+        self.r_dim = 4
         self.dt = dt
-        self.demo_trajs = demo_trajs
-        self.demo_pos = [traj[:, :self.x_dim] for traj in demo_trajs]
-        self.demo_quat = [traj[:, self.x_dim:] for traj in demo_trajs]
-        self.demo_vel = [self.compute_vel(traj) for traj in self.demo_pos]
-        self.demo_trajs_flat = np.concatenate(demo_trajs, axis=0)
+        self.x = x
+        self.x_flat = np.concatenate(x, axis=0)
+        self.x_dot = x_dot
+        self.quat = quat
+        self.omega = omega
+        self.demo_trajs = [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         self.demo_segment_idx = np.cumsum(
-            [0] + [traj.shape[0] for traj in demo_trajs]
+            [0] + [traj.shape[0] for traj in self.demo_trajs]
         )[:-1]
         self.switch = switch
         self.backtrack_steps = backtrack_steps
@@ -106,9 +94,52 @@ class DSPolicy:
         self.pos_backtrack_model = None
         self.quat_model = None
         self.p_in, self.q_in, self.p_out, self.q_out, self.p_init, self.q_init, self.p_att, self.q_att = (
-            self.quad_data_preprocess(demo_trajs)
+            self.quad_data_preprocess(self.demo_trajs)
         )
-        
+        self.model = None
+
+    
+    def load_model(self, model_path: str):
+        model_name = os.path.basename(model_path)
+        width_str = model_name.split("width")[1].split("_")[0]
+        depth_str = model_name.split("depth")[1].split("_")[0]
+        width_size = int(width_str)
+        depth = int(depth_str)
+        self.model = NeuralODE(self.x_dim+self.r_dim, width_size, depth)
+        self.model.load_state_dict(torch.load(model_path, weights_only=True))
+        self.model.eval()
+    
+
+    def train_model(self, save_path: str, batch_size: int=1, lr_strategy: tuple=(1e-3, 1e-4, 1e-5), steps_strategy: tuple=(5000, 5000, 5000), length_strategy: tuple=(0.4, 0.7, 1), plot: bool=True, print_every: int=100):
+        """
+        Args:
+            save_path: path to save the trained model
+            batch_size: number of trajectories to train on at a time
+            lr_strategy: learning rate in each phase
+            steps_strategy: number of steps in each phase
+            length_strategy: fraction of the trajectories available for training in each phase
+            plot: whether to plot the training progress
+            print_every: print the training progress every print_every steps
+        """
+        width_str = save_path.split("width")[1].split("_")[0]
+        depth_str = save_path.split("depth")[1].split("_")[0]
+        width_size = int(width_str)
+        depth = int(depth_str)
+        self.model = train(
+            [np.concatenate([self.x[i], self.quat[i]], axis=-1) for i in range(len(self.x))],
+            [np.concatenate([self.x_dot[i], self.omega[i]], axis=-1) for i in range(len(self.x_dot))],
+            save_path,
+            batch_size=batch_size,
+            lr_strategy=lr_strategy,
+            steps_strategy=steps_strategy,
+            length_strategy=length_strategy,
+            width_size=width_size,
+            depth=depth,
+            plot=plot,
+            print_every=print_every
+        )
+        self.model.eval()
+
 
     def load_pos_model(self, pos_model_path: str):
         pos_model_name = os.path.basename(pos_model_path)
@@ -174,9 +205,24 @@ class DSPolicy:
         # )
         # self.pos_backtrack_model.eval()
 
+    def model_forward(self, state: np.ndarray):
+        if self.model is None: # pos_model and quat_model are separate
+            with torch.no_grad():
+                x_dot = self.pos_model.forward(state[:self.x_dim]).numpy()
+            
+            q_curr = R.from_quat(state[self.x_dim:])
+                        
+            _, _, omega = self.quat_model._step(q_curr, self.dt)
+                        
+            return np.concatenate([x_dot, omega])
+        else:
+            with torch.no_grad():
+                return self.model.forward(state).numpy()
+
     def compute_vel(self, x: np.ndarray):
         """
         Compute velocities from trajectories
+        NOTE: not used
         """
         x_dot = np.diff(x, axis=0) / self.dt
         x_dot = np.vstack([x_dot, x_dot[-1]])
@@ -271,113 +317,139 @@ class DSPolicy:
         Returns:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
+        action_from_model = self.model_forward(state) # action from model, with no CLF/CBF
+        if clf:
+            action = self.apply_clf(state, action_from_model, alpha_V, lookahead)
+        else:
+            action = action_from_model
+        return action
 
-        x_dot: np.ndarray = self.get_x_dot(state[: self.x_dim], clf, alpha_V, lookahead)
-        r_dot: np.ndarray = self.get_r_dot(state[self.x_dim : self.x_dim + self.r_dim])
-        return np.concatenate([x_dot, r_dot])
+    def apply_clf(self, current_state: np.ndarray, action_from_model: np.ndarray, alpha_V: float, lookahead: int) -> tuple[np.ndarray, np.ndarray]:
+        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(current_state[:self.x_dim], self.switch, lookahead)
+        ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
+        ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
+        ref_state = np.concatenate([ref_x, ref_quat])
 
-    def get_x_dot(self, x_state: np.ndarray, clf: bool=True, alpha_V: float=20.0, lookahead: int=5) -> np.ndarray:
-        """
-        Args:
-            state: np.ndarray(n_dims)
-            alpha_V: float, CLF parameter, controls how close to follow the reference trajectory
-            lookahead: number of points to look ahead on the chosen trajectory for smoother tracking
-        Returns:
-            x_dot: np.ndarray(dx, dy, dz)
-        """
-        if not clf:
+        # if self.model is None: # pos_model and quat_model are separate, only apply to pos_model
+        if True: # TODO   
+            current_x = current_state[:self.x_dim]
+            f_x = action_from_model[:self.x_dim]
             with torch.no_grad():
-                return self.pos_model.forward(torch.tensor(x_state, dtype=torch.float32)).numpy()
+                # f_xref = jnp.array(self.pos_model.forward(ref_x))
+                f_xref = jnp.array(self.model.forward(ref_state))[:self.x_dim] # TODO
+
+            error = jnp.array(current_x) - jnp.array(ref_x)
+
+            # CLF (Control Lyapunov Function)
+            V = jnp.sum(jnp.square(error)) / 2
+
+            # Compute CLF derivative terms
+            s = jnp.dot(error, f_x - f_xref)
+
+            # QP parameters for CLF-based control
+            Q_opt = jnp.eye(3)  # Cost on control input
+            G_opt = 2 * error[:3].reshape(1, -1)  # CLF derivative terms
+            h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
+            
+            u_star = qp_solve(Q_opt, G_opt, h_opt).primal.reshape(-1)
+
+            action = action_from_model
+            action[:3] = f_x[:3] + u_star
+
+            return action
         
-        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(x_state, self.switch)
-        self.ref_point_idx = min(self.ref_point_idx+lookahead, self.demo_trajs[self.ref_traj_idx].shape[0] - 1)
+        else: # unified model
+            quat = jnp.array(current_state[3:]).reshape((-1,1))
+            # Scaling factors for position and quaternion errors in the cost function
+            scale_q = 1
+            scale_p = 1
 
-        x_dot, u_star = self.compute_clf(
-            x_state,
-            self.demo_trajs[self.ref_traj_idx][self.ref_point_idx][: self.x_dim],
-            self.pos_model,
-            alpha_V,
-        )
+            # Construct the cost matrix for the QP
+            Q_opt = jnp.vstack((jnp.hstack((scale_p*jnp.eye(3), jnp.zeros((3,3)))), jnp.hstack((jnp.zeros((3,3)), scale_q*jnp.eye(3)))))
+            
+            # Compute error between current and reference state
+            err = jnp.array(current_state) - jnp.array(ref_state)
+            # Normalize quaternion error
+            err = err.at[3:].set(err[3:]/jnp.linalg.norm(err[3:]))
+            err_pos = err[:3]  # Position error
+            err_quat = err[3:]  # Quaternion error
+
+            # Lyapunov function (quadratic in the error)
+            V = jnp.sum(jnp.square(2*err))/4
+            # Get nominal dynamics from the learned model
+            with torch.no_grad():
+                vel = jnp.array(self.model.forward(current_state).reshape((-1,1)))
+            vel_pos = vel[:3]  # Position dynamics
+
+            # Angular velocity from the model
+            vel_ang = vel[3:].reshape((-1,1))
+            vel_ang_quat = jnp.vstack((0.0, vel_ang))  # Prepend 0 for quaternion multiplication
+
+            # Get reference dynamics
+            vel_pos_ref = jnp.array(self.x_dot[self.ref_traj_idx][self.ref_point_idx]).reshape((-1,1))
+
+            vel_ang_ref = jnp.array(self.omega[self.ref_traj_idx][self.ref_point_idx]).reshape((-1,1))
+            vel_ang_quat_ref = jnp.vstack((0.0, vel_ang_ref))  # Prepend 0 for quaternion multiplication
+
+            # Compute the CLF derivative terms
+            s_p = jnp.vdot(err_pos, vel_pos - vel_pos_ref)  # Position term
+            s_q = jnp.vdot(err_quat/2.0, quat_mult(vel_ang_quat[:, 0], quat).reshape((-1,1)) - quat_mult(vel_ang_quat_ref[:, 0], ref_quat.reshape((-1,1))).reshape((-1,1)))  # Quaternion term
+
+            s = s_p + s_q  # Combined CLF derivative
+
+            # Construct quaternion matrix for quaternion dynamics
+            Q = jnp.array([[quat[0, 0], quat[1, 0], quat[2, 0], quat[3, 0]],
+                            [-quat[1, 0], quat[0,0], quat[3, 0], -quat[2, 0]],
+                            [-quat[2, 0], -quat[3, 0], quat[0, 0], quat[1, 0]],
+                            [-quat[3, 0], quat[2, 0], -quat[1, 0], quat[0, 0]]])
+            Q2 = Q[:, 1:] # 4 x 3
+            Q2_minus = -Q2
+            Q2_1 = jnp.vstack((Q2_minus[0, :], -Q2_minus[1:,:]))
+
+            # Construct the CLF constraint for the QP
+            G_opt = 2*jnp.hstack((err_pos.T, (err_quat.T/2.0) @ Q2_1)).reshape(1, -1)  # Ensure shape (1,6)
+            h_opt = jnp.array([-alpha_V*V - 2*s]).reshape(-1)  # Ensure shape (1,)
+
+            # Initialize QP solver
+            qp = OSQP()
+
+            # Solve the QP to find optimal control inputs
+            sol = qp.run(params_obj=(Q_opt,jnp.zeros(Q_opt.shape[0])), params_ineq=(G_opt, h_opt)).params
+
+            ustar = sol.primal.reshape((-1,1))
+
+            # Extract position and angular velocity control inputs
+            u_pos = ustar[:3]
+            u_ang_quat = jnp.vstack((0.0, ustar[3:]))
+
+            # Compute state derivatives with the control inputs
+            p_dot = vel_pos + u_pos  # Position derivative
+            q_dot = 0.5*quat_mult(vel_ang_quat[:, 0] + u_ang_quat[:, 0], quat).reshape((-1,1))
+
+            q_dot_Quat = Quaternion(q_dot[0][0], q_dot[1:].reshape(-1))
+            q_dot_Quat.normalize()
+            # Combine into full state derivative
+            x_dot_cmd = np.concatenate((p_dot.reshape(-1), q_dot_Quat.axis_angle().reshape(-1)))
+
+            return x_dot_cmd
         
-        return x_dot
-
-    def get_r_dot(self, r_state: np.ndarray) -> np.ndarray:
-        """
-        Args:
-            state: np.ndarray(n_dims)
-        Returns:
-            r_dot: np.ndarray(droll, dpitch, dyaw)
-        """
-        import time
-        start_time = time.time()
-        
-        # Timer for dimension check
-        if self.r_dim == 0:
-            return np.array([])
-        
-        # Timer for quaternion extraction
-        quat_extract_start = time.time()
-        q_curr = R.from_quat(r_state)
-        quat_extract_time = time.time() - quat_extract_start
-        
-        # Timer for quaternion DS computation
-        quat_ds_start = time.time()
-        _, _, omega = self.quat_model._step(q_curr, self.dt)
-        quat_ds_time = time.time() - quat_ds_start
-        
-        total_time = time.time() - start_time
-        # print(f"Rotation Timing - Total: {total_time:.6f}s, Quat Extract: {quat_extract_time:.6f}s, Quat DS: {quat_ds_time:.6f}s")
-        
-        return omega
-
-    def compute_clf(self, current_state: np.ndarray, ref_state: np.ndarray, model: NeuralODE, alpha_V: float) -> tuple[np.ndarray, np.ndarray]:
-        
-        start_time = time.time()
-
-        with torch.no_grad():
-            # Get nominal dynamics from neural ODE
-            f_x = jnp.array(model.forward(current_state))
-            f_xref = jnp.array(model.forward(ref_state))
-
-        error = jnp.array(current_state) - jnp.array(ref_state)
-
-        # CLF (Control Lyapunov Function)
-        V = jnp.sum(jnp.square(error)) / 2
-
-        # Compute CLF derivative terms
-        s = jnp.dot(error, f_x - f_xref)
-
-        # QP parameters for CLF-based control
-        Q_opt = jnp.eye(3)  # Cost on control input
-        G_opt = 2 * error.reshape(1, -1)  # CLF derivative terms
-        h_opt = jnp.array([-alpha_V * V - 2 * s])  # CLF constraint
-        
-        qp_solve_start = time.time()
-        u_star = qp_solve(Q_opt, G_opt, h_opt).primal.reshape(-1)
-        qp_solve_time = time.time() - qp_solve_start
-
-        x_dot = f_x + u_star
-
-        total_time = time.time() - start_time
-        # print(f"CLF Timing - Total: {total_time:.6f}s, QP Solve: {qp_solve_time:.6f}s")
-
-        return x_dot, u_star
     
 
-    def choose_ref(self, state: np.ndarray, switch: bool=False) -> tuple[int, int]:
+    def choose_ref(self, x_state: np.ndarray, switch: bool=False, lookahead: int=5) -> tuple[int, int]:
         """
         Choose ref_traj_idx and ref_point_idx based on state.
         TODO: for now uses Euclidean distance.
         Args:
             state: np.ndarray(n_dims)
             switch: bool, if False, sticks to the current trajectory
+            lookahead: int, number of points to look ahead on the chosen trajectory for smoother tracking
         Returns:
             ref_traj_idx: int
             point_idx within the traj: int
         """
         if switch or self.ref_traj_idx is None or self.ref_point_idx is None:
             distances = np.sqrt(
-                np.sum((self.demo_trajs_flat[:, : self.x_dim] - state) ** 2, axis=1)
+                np.sum((self.x_flat - x_state) ** 2, axis=1)
             )
             # Find the index of the closest point in flattened trajectories
             closest_idx = np.argmin(distances)
@@ -390,9 +462,11 @@ class DSPolicy:
                 point_idx = closest_idx
             else:
                 point_idx = closest_idx - self.demo_segment_idx[traj_idx]
-        else:
+        else: # stick to the current trajectory
             traj_idx = self.ref_traj_idx
-            distances = np.sqrt(np.sum((self.demo_trajs[self.ref_traj_idx][:, :self.x_dim] - state) ** 2, axis=1))
+            distances = np.sqrt(np.sum((self.demo_trajs[self.ref_traj_idx][:, :self.x_dim] - x_state) ** 2, axis=1))
             point_idx = np.argmin(distances)
+        
+        point_idx = min(point_idx+lookahead, self.demo_trajs[traj_idx].shape[0] - 1)
 
         return int(traj_idx), int(point_idx)

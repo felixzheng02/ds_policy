@@ -188,3 +188,6 @@ src/**/*.py[cod]
 *.bmp
 *.tiff
 *.ico
+
+models/
+data/
