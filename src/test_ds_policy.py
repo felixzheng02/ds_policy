@@ -15,12 +15,16 @@ class Simulator:
         self.traj = []
         self.ref_traj_indices = []
 
-    def simulate(self, init_state, save_path: str, n_steps: int = 100, clf: bool=True):
+    def simulate(
+        self, init_state, save_path: str, n_steps: int = 100, clf: bool = True
+    ):
         state = init_state
         self.traj.append(state.copy())
         for i in range(n_steps):
             quat = utils.euler_to_quat(state[3:])
-            action = self.ds_policy.get_action(np.concatenate([state[:3], quat]), clf=clf, alpha_V=1, lookahead=5)
+            action = self.ds_policy.get_action(
+                np.concatenate([state[:3], quat]), clf=clf, alpha_V=1, lookahead=5
+            )
             if clf:
                 self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
             state += action * 0.02
@@ -30,7 +34,7 @@ class Simulator:
             demo_trajs=np.array(self.ds_policy.demo_trajs, dtype=object),
             traj=self.traj,
             ref_traj_indices=self.ref_traj_indices,
-            allow_pickle=True
+            allow_pickle=True,
         )
         return self.traj, self.ds_policy.demo_trajs, self.ref_traj_indices
 
@@ -84,9 +88,9 @@ def animate(data_path: str, save_path: str = None):
         generated_line.set_3d_properties(traj[:frame, 2])
         generated_line.set_alpha(1)
         generated_line.set_color("#3A7D44")
-        
+
         if len(ref_traj_indices) > 0:
-            ref_traj = demo_trajs[ref_traj_indices[frame-1]]
+            ref_traj = demo_trajs[ref_traj_indices[frame - 1]]
             ref_line.set_data(ref_traj[:, 0], ref_traj[:, 1])
             ref_line.set_3d_properties(ref_traj[:, 2])
             ref_line.set_alpha(1)
@@ -100,10 +104,10 @@ def animate(data_path: str, save_path: str = None):
         )
 
         # Get current position
-        pos = traj[frame-1, :3]
+        pos = traj[frame - 1, :3]
 
         # Convert Euler angles to direction vector
-        euler_angles = traj[frame-1, 3:]
+        euler_angles = traj[frame - 1, 3:]
         quat = utils.euler_to_quat(euler_angles)
 
         # Create direction vector from quaternion
@@ -153,7 +157,13 @@ def animate(data_path: str, save_path: str = None):
         )
         orientation_label.set_visible(True)
 
-        return generated_line, ref_line, start_point, arrow_container[0], orientation_label
+        return (
+            generated_line,
+            ref_line,
+            start_point,
+            arrow_container[0],
+            orientation_label,
+        )
 
     total_frames = len(traj)
 
@@ -183,12 +193,16 @@ if __name__ == "__main__":
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
         x, x_dot, q, omega = load_data("custom")
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
-        ds_policy = DSPolicy(x, x_dot, q, omega, dt=1/60, switch=False)
+        ds_policy = DSPolicy(x, x_dot, q, omega, dt=1 / 60, switch=False)
         # ds_policy.train_model(save_path="DS-Policy/models/mlp_width256_depth6_pos_quat.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=True)
         # ds_policy.load_model(model_path="DS-Policy/models/mlp_width256_depth5_test.pt")
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
-        ds_policy.load_pos_model(pos_model_path="DS-Policy/models/mlp_width128_depth3.pt")
-        ds_policy.train_quat_model(save_path="DS-Policy/models/quat_model.json", k_init=10)
+        ds_policy.load_pos_model(
+            pos_model_path="DS-Policy/models/mlp_width128_depth3.pt"
+        )
+        ds_policy.train_quat_model(
+            save_path="DS-Policy/models/quat_model.json", k_init=10
+        )
         # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)
         # Randomly initialize starting point
@@ -200,12 +214,14 @@ if __name__ == "__main__":
         # Set the same random seed for quaternion initialization to ensure reproducibility
         quat_rng = np.random.RandomState(seed=4)
         init_quat = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
-        init_state = np.concatenate([np.array([-0.15661161, -0.12824412, -0.34663675]), init_quat])
+        init_state = np.concatenate(
+            [np.array([-0.15661161, -0.12824412, -0.34663675]), init_quat]
+        )
         simulator.simulate(
             np.concatenate([x[1][0], utils.quat_to_euler(q[1][0])]),
             "DS-Policy/data/test_ds_policy.npz",
             n_steps=100,
-            clf=True
+            clf=True,
         )
     save_path = "DS-Policy/data/test_ds_policy_no_switch_no_backtrack.mp4"
     animate("DS-Policy/data/test_ds_policy.npz", None)

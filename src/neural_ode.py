@@ -35,10 +35,10 @@ class NeuralODE(nn.Module):
         """
         super(NeuralODE, self).__init__()
 
-        if data_size == 3: # only position
+        if data_size == 3:  # only position
             output_size = 3
-        elif data_size == 7: # position and quaternion
-            output_size = 6 # x_dot, omega
+        elif data_size == 7:  # position and quaternion
+            output_size = 6  # x_dot, omega
         else:
             raise ValueError(f"Invalid data size: {data_size}")
 
@@ -78,6 +78,7 @@ class NeuralODE(nn.Module):
             x = torch.tensor(x, dtype=torch.float32)
 
         return self.mlp(x)
+
 
 class NeuralODEWrapper(nn.Module):
     """
@@ -119,10 +120,10 @@ class NeuralODEWrapper(nn.Module):
             self.neural_ode,
             y0,
             ts,
-            method='dopri5',
+            method="dopri5",
             rtol=1e-3,
             atol=1e-6,
-            options={'max_num_steps': 4000}
+            options={"max_num_steps": 4000},
         )
 
         return solution

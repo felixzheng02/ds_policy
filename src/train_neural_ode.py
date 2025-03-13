@@ -36,7 +36,9 @@ def plot_vector_field(
     """
     data_size = demo_trajs[0].shape[-1]
     model = NeuralODE(data_size, width_size, depth)
-    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
+    model.load_state_dict(
+        torch.load(model_path, weights_only=True, map_location=device)
+    )
     model.to(device)
     model.eval()
 
@@ -162,7 +164,9 @@ def rollout_trajectory(
         print("rollout_trajectory only works for position data")
         return
     model = NeuralODE(data_size, width_size, depth)
-    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
+    model.load_state_dict(
+        torch.load(model_path, weights_only=True, map_location=device)
+    )
     model.to(device)
     model.eval()
 
@@ -282,7 +286,9 @@ def train(
         if data_size == 3:
             save_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos.pt"
         elif data_size == 7:
-            save_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos_quat.pt"
+            save_path = (
+                f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos_quat.pt"
+            )
         else:
             raise ValueError(f"Invalid data size: {data_size}")
 
@@ -304,42 +310,42 @@ def train(
     # Training loop with curriculum learning
     for phase, (lr, epochs) in enumerate(zip(lr_strategy, epoch_strategy)):
         print(f"\nPhase {phase+1}: Learning rate = {lr}, Epochs = {epochs}")
-        
+
         # Setup optimizer with learning rate scheduler
         optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
         loss_fn = nn.MSELoss()
 
         # Track losses for plotting
         losses = []
-        
+
         for epoch in range(epochs):
             start_time = time.time()
-            
+
             # Reset gradients for each batch iteration
             running_loss = 0.0
             num_batches = 0
-            
+
             # Iterate through mini-batches
             for batch_x, batch_x_dot in dataloader:
                 optimizer.zero_grad()
-                
+
                 # Forward pass
                 v_pred = model.forward(batch_x)
-                
+
                 # Compute loss
                 loss = loss_fn(v_pred, batch_x_dot)
-                
+
                 # Backward pass and optimize
                 loss.backward()
                 optimizer.step()
-                
+
                 running_loss += loss.item()
                 num_batches += 1
-            
+
             # Calculate average loss across all batches
             avg_loss = running_loss / num_batches
             losses.append(avg_loss)
-            
+
             end_time = time.time()
 
             if (epoch % print_every) == 0 or epoch == epochs - 1:
@@ -355,10 +361,10 @@ def train(
         # Plot training loss curve
         plt.figure(figsize=(10, 5))
         plt.plot(losses)
-        plt.title('Training Loss')
-        plt.xlabel('Steps')
-        plt.ylabel('Loss')
-        plt.yscale('log')
+        plt.title("Training Loss")
+        plt.xlabel("Steps")
+        plt.ylabel("Loss")
+        plt.yscale("log")
         plt.grid(True)
         plt.show()
         plt.close()
@@ -366,7 +372,13 @@ def train(
     return model
 
 
-def label_pred_comparison(model_path: str, x: list[np.ndarray], x_dot: list[np.ndarray], width_size: int, depth: int):
+def label_pred_comparison(
+    model_path: str,
+    x: list[np.ndarray],
+    x_dot: list[np.ndarray],
+    width_size: int,
+    depth: int,
+):
     # Plot velocity predictions vs actual for each trajectory
     x_flat = np.concatenate(x, axis=0)
     x_dot_flat = np.concatenate(x_dot, axis=0)
@@ -375,14 +387,16 @@ def label_pred_comparison(model_path: str, x: list[np.ndarray], x_dot: list[np.n
     data_size = x_flat.shape[-1]
 
     model = NeuralODE(data_size, width_size, depth)
-    model.load_state_dict(torch.load(model_path, weights_only=True, map_location=device))
+    model.load_state_dict(
+        torch.load(model_path, weights_only=True, map_location=device)
+    )
     model.to(device)
     model.eval()
     with torch.no_grad():
         v_pred = model.forward(torch.tensor(x_flat, dtype=torch.float32).to(device))
 
     v_pred_np = v_pred.cpu().numpy()
-    
+
     # Determine if we're dealing with position only or position+quaternion
     if data_size == 3:  # Position only - plot translational velocity
         plt.figure(figsize=(15, 5))
@@ -393,12 +407,14 @@ def label_pred_comparison(model_path: str, x: list[np.ndarray], x_dot: list[np.n
             plt.plot(v_pred_np[:, i], "--", label=f"Pred d{comp}/dt")
             plt.legend()
             plt.title(f"{comp} translational velocity")
-        
+
         plt.tight_layout()
         plt.show()
         plt.close()
-        
-    elif data_size == 7:  # Position + quaternion - plot both translational and angular velocity
+
+    elif (
+        data_size == 7
+    ):  # Position + quaternion - plot both translational and angular velocity
         # First figure: Translational velocity (first 3 components)
         plt.figure(figsize=(15, 5))
         for i, comp in enumerate(["x", "y", "z"]):
@@ -407,23 +423,24 @@ def label_pred_comparison(model_path: str, x: list[np.ndarray], x_dot: list[np.n
             plt.plot(v_pred_np[:, i], "--", label=f"Pred d{comp}/dt")
             plt.legend()
             plt.title(f"{comp} translational velocity")
-        
+
         plt.tight_layout()
         plt.show()
         plt.close()
-        
+
         # Second figure: Angular velocity (last 3 components)
         plt.figure(figsize=(15, 5))
         for i, comp in enumerate(["x", "y", "z"]):
             plt.subplot(1, 3, i + 1)
-            plt.plot(x_dot_flat[:, i+3], label=f"Real ω_{comp}")
-            plt.plot(v_pred_np[:, i+3], "--", label=f"Pred ω_{comp}")
+            plt.plot(x_dot_flat[:, i + 3], label=f"Real ω_{comp}")
+            plt.plot(v_pred_np[:, i + 3], "--", label=f"Pred ω_{comp}")
             plt.legend()
             plt.title(f"{comp} angular velocity")
-        
+
         plt.tight_layout()
         plt.show()
         plt.close()
+
 
 if __name__ == "__main__":
     width_size = 256
@@ -433,8 +450,10 @@ if __name__ == "__main__":
     x_pos = x
     x_dot_pos = x_dot
     x_pos_quat = [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
-    x_dot_pos_quat = [np.concatenate([x_dot[i], omega[i]], axis=-1) for i in range(len(x_dot))]
-    
+    x_dot_pos_quat = [
+        np.concatenate([x_dot[i], omega[i]], axis=-1) for i in range(len(x_dot))
+    ]
+
     # Determine data size based on the concatenated data
     data_size = np.concatenate([x[0], quat[0]], axis=-1).shape[-1]
     model_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_test.pt"
@@ -451,22 +470,16 @@ if __name__ == "__main__":
             width_size=width_size,
             depth=depth,
             plot=True,
-            print_every=10
+            print_every=10,
         )
 
     if False:
         label_pred_comparison(
-            model_path, 
-            [x_pos_quat[0]], 
-            [x_dot_pos_quat[0]],
-            width_size,
-            depth
+            model_path, [x_pos_quat[0]], [x_dot_pos_quat[0]], width_size, depth
         )
 
     if True:
         plot_vector_field(model_path, x_pos_quat, width_size, depth)
 
     if False:
-        rollout_trajectory(
-            model_path, x, np.array([0, -0.2, -0.2]), width_size, depth
-        )
+        rollout_trajectory(model_path, x, np.array([0, -0.2, -0.2]), width_size, depth)

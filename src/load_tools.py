@@ -308,29 +308,30 @@ def load_data(input_opt):
             # plot euler_traj and ang_vel_traj_euler
             debug_on = False
             if debug_on:
-                euler_traj = quat_traj_scipy.as_euler('xyz', degrees=False)
+                euler_traj = quat_traj_scipy.as_euler("xyz", degrees=False)
                 ang_vel_traj_euler = np.diff(euler_traj, axis=0) / dt
                 import matplotlib.pyplot as plt
+
                 fig, axs = plt.subplots(2, 3, figsize=(12, 8))
                 axs[0, 0].plot(ang_vel_traj[:, 0])
-                axs[0, 0].set_title('Angular Velocity X')
-                axs[0, 0].set_ylabel('Angular Velocity (rad/s)')
+                axs[0, 0].set_title("Angular Velocity X")
+                axs[0, 0].set_ylabel("Angular Velocity (rad/s)")
                 axs[0, 1].plot(ang_vel_traj[:, 1])
-                axs[0, 1].set_title('Angular Velocity Y') 
+                axs[0, 1].set_title("Angular Velocity Y")
                 axs[0, 2].plot(ang_vel_traj[:, 2])
-                axs[0, 2].set_title('Angular Velocity Z')
-                
+                axs[0, 2].set_title("Angular Velocity Z")
+
                 axs[1, 0].plot(ang_vel_traj_euler[:, 0])
-                axs[1, 0].set_title('Euler Angular Velocity X')
-                axs[1, 0].set_xlabel('Time Step')
-                axs[1, 0].set_ylabel('Angular Velocity (rad/s)')
+                axs[1, 0].set_title("Euler Angular Velocity X")
+                axs[1, 0].set_xlabel("Time Step")
+                axs[1, 0].set_ylabel("Angular Velocity (rad/s)")
                 axs[1, 1].plot(ang_vel_traj_euler[:, 1])
-                axs[1, 1].set_title('Euler Angular Velocity Y')
-                axs[1, 1].set_xlabel('Time Step')
+                axs[1, 1].set_title("Euler Angular Velocity Y")
+                axs[1, 1].set_xlabel("Time Step")
                 axs[1, 2].plot(ang_vel_traj_euler[:, 2])
-                axs[1, 2].set_title('Euler Angular Velocity Z')
-                axs[1, 2].set_xlabel('Time Step')
-                
+                axs[1, 2].set_title("Euler Angular Velocity Z")
+                axs[1, 2].set_xlabel("Time Step")
+
                 plt.tight_layout()
                 plt.show()
 
