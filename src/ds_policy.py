@@ -3,9 +3,12 @@ import sys
 import logging
 import time
 
-# Import utility to disable JAX debug messages
-from disable_jax_logging import disable_jax_logging
-
+sys.path.append(
+    os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        "DS-Policy/src/",
+    )
+)
 from neural_ode import NeuralODE
 import numpy as np
 import torch
@@ -19,7 +22,6 @@ from scipy.spatial.transform import Rotation as R
 from train_neural_ode import train
 from ds_utils import quat_mult, Quaternion
 
-# Add the quaternion_ds package to sys.path to import it
 sys.path.append(
     os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -61,6 +63,8 @@ class DSPolicy:
         omega: list[np.ndarray],
         dt: float = 0.01,
         switch: bool = False,
+        lookahead: int = 5,
+        demo_traj_probs: np.ndarray = None,
         backtrack_steps: int = 0,
     ):
         """
@@ -71,30 +75,32 @@ class DSPolicy:
             omega: list of angular velocity trajectories
             dt: Time step
             switch: If True, allows switching between trajectories at runtime. If False, sticks to initially chosen trajectory.
-            backtrack_steps: Number of steps to backtrack on collision
+            lookahead: Number of steps to lookahead for reference trajectory selection
+            backtrack_steps: Number of steps to backtrack on collision, TODO: not used
         """
         self.x_dim = 3
         self.r_dim = 4
         self.dt = dt
         self.x = x
-        self.x_flat = np.concatenate(x, axis=0)
         self.x_dot = x_dot
         self.quat = quat
         self.omega = omega
-        self.demo_trajs = [
-            np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))
-        ]
-        self.demo_segment_idx = np.cumsum(
-            [0] + [traj.shape[0] for traj in self.demo_trajs]
-        )[:-1]
         self.switch = switch
+        self.lookahead = lookahead
         self.backtrack_steps = backtrack_steps
+
+        self.demo_traj_probs = (
+            np.ones(len(x)) if demo_traj_probs is None else demo_traj_probs
+        )
 
         self.ref_traj_idx = None
         self.ref_point_idx = None
 
+        # models
+        self.model = None
+        self.model_reverse = None
         self.pos_model = None
-        self.pos_backtrack_model = None
+        self.pos_model_reverse = None
         self.quat_model = None
         (
             self.p_in,
@@ -105,8 +111,9 @@ class DSPolicy:
             self.q_init,
             self.p_att,
             self.q_att,
-        ) = self.quad_data_preprocess(self.demo_trajs)
-        self.model = None
+        ) = self.quad_data_preprocess(
+            [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
+        )
 
     def load_model(self, model_path: str):
         model_name = os.path.basename(model_path)
@@ -362,19 +369,25 @@ class DSPolicy:
         state: np.ndarray,
         clf: bool = True,
         alpha_V: float = 20.0,
-        lookahead: int = 5,
+        lookahead: int = None,
     ) -> np.ndarray:
         """
         Args:
             state: position + quaternion
+            clf: if True, apply CLF
+            alpha_V: CLF parameter
+            lookahead: Number of steps to lookahead for reference trajectory selection, if None, use self.lookahead, otherwise update self.lookahead
         Returns:
             action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
         """
+        if lookahead is not None:
+            self.lookahead = lookahead
+
         action_from_model = self.model_forward(
             state
         )  # action from model, with no CLF/CBF
         if clf:
-            action = self.apply_clf(state, action_from_model, alpha_V, lookahead)
+            action = self.apply_clf(state, action_from_model, alpha_V)
         else:
             action = action_from_model
         return action
@@ -384,10 +397,9 @@ class DSPolicy:
         current_state: np.ndarray,
         action_from_model: np.ndarray,
         alpha_V: float,
-        lookahead: int,
     ) -> tuple[np.ndarray, np.ndarray]:
         self.ref_traj_idx, self.ref_point_idx = self.choose_ref(
-            current_state[: self.x_dim], self.switch, lookahead
+            current_state[: self.x_dim], self.switch
         )
         ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
         ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
@@ -396,12 +408,10 @@ class DSPolicy:
         if (
             self.model is None
         ):  # pos_model and quat_model are separate, only apply to pos_model
-            # if True: # TODO
             current_x = current_state[: self.x_dim]
             f_x = action_from_model[: self.x_dim]
             with torch.no_grad():
-                f_xref = jnp.array(self.pos_model.forward(ref_x))  # TODO
-                # f_xref = jnp.array(self.model.forward(ref_state))[:self.x_dim]
+                f_xref = jnp.array(self.pos_model.forward(ref_x))
 
             error = jnp.array(current_x) - jnp.array(ref_x)
 
@@ -423,7 +433,7 @@ class DSPolicy:
 
             return action
 
-        else:  # unified model
+        else:  # unified model NOTE: not good
             quat = jnp.array(current_state[3:]).reshape((-1, 1))
             # Scaling factors for position and quaternion errors in the cost function
             scale_q = 1
@@ -458,16 +468,16 @@ class DSPolicy:
             )  # Prepend 0 for quaternion multiplication
 
             # Get reference dynamics TODO
-            # with torch.no_grad():
-            #     vel_ref = jnp.array(self.model.forward(ref_state)).reshape((-1,1))
-            # vel_pos_ref = vel_ref[:3].reshape((-1,1))
-            # vel_ang_ref = vel_ref[3:].reshape((-1,1))
-            vel_pos_ref = jnp.array(
-                self.x_dot[self.ref_traj_idx][self.ref_point_idx]
-            ).reshape((-1, 1))
-            vel_ang_ref = jnp.array(
-                self.omega[self.ref_traj_idx][self.ref_point_idx]
-            ).reshape((-1, 1))
+            with torch.no_grad():
+                vel_ref = jnp.array(self.model.forward(ref_state)).reshape((-1, 1))
+            vel_pos_ref = vel_ref[:3].reshape((-1, 1))
+            vel_ang_ref = vel_ref[3:].reshape((-1, 1))
+            # vel_pos_ref = jnp.array(
+            #     self.x_dot[self.ref_traj_idx][self.ref_point_idx]
+            # ).reshape((-1, 1))
+            # vel_ang_ref = jnp.array(
+            #     self.omega[self.ref_traj_idx][self.ref_point_idx]
+            # ).reshape((-1, 1))
             vel_ang_quat_ref = jnp.vstack(
                 (0.0, vel_ang_ref)
             )  # Prepend 0 for quaternion multiplication
@@ -533,44 +543,75 @@ class DSPolicy:
 
             return x_dot_cmd
 
-    def choose_ref(
-        self, x_state: np.ndarray, switch: bool = False, lookahead: int = 5
-    ) -> tuple[int, int]:
+    def choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int]:
         """
         Choose ref_traj_idx and ref_point_idx based on state.
-        TODO: for now uses Euclidean distance.
+        Criteria:
+            - for each demo trajectory i, compute smallest distance to x_state among all its points: closest_distances[i], corresponding point index: closest_indices[i]
+            - score[i] = log(p[i]) - closest_distances[i] TODO: this could be modified
+            - prob_dist = softmax(score)
+            - choose traj_idx = argmax(prob_dist), point_idx = closest_indices[traj_idx]
         Args:
-            state: np.ndarray(n_dims)
+            x_state: np.ndarray(x_dim)
             switch: bool, if False, sticks to the current trajectory
-            lookahead: int, number of points to look ahead on the chosen trajectory for smoother tracking
         Returns:
             ref_traj_idx: int
             point_idx within the traj: int
         """
-        if switch or self.ref_traj_idx is None or self.ref_point_idx is None:
-            distances = np.sqrt(np.sum((self.x_flat - x_state) ** 2, axis=1))
-            # Find the index of the closest point in flattened trajectories
-            closest_idx = np.argmin(distances)
-            # Determine which trajectory the closest point belongs to
-            traj_idx = (
-                np.searchsorted(self.demo_segment_idx, closest_idx, side="right") - 1
-            )
-            # Compute point index within the chosen trajectory
-            if traj_idx == 0:
-                point_idx = closest_idx
-            else:
-                point_idx = closest_idx - self.demo_segment_idx[traj_idx]
+        if switch or self.ref_traj_idx is None:
+            # Calculate distances from current state to each point in each trajectory
+            closest_indices = []
+            closest_distances = []
+
+            # Iterate through each trajectory
+            for traj in self.x:
+                distances = np.sqrt(np.sum((traj - x_state) ** 2, axis=1))
+                closest_idx = np.argmin(distances)
+                min_distance = distances[closest_idx]
+                closest_indices.append(closest_idx)
+                closest_distances.append(min_distance)
+
+            scores = 10 * np.log(self.demo_traj_probs) - np.array(closest_distances)
+            prob_dist = np.exp(scores) / np.sum(np.exp(scores))
+
+            # Select the trajectory with the highest probability
+            traj_idx = np.argmax(prob_dist)
+            # Get the corresponding closest point index for the selected trajectory
+            point_idx = closest_indices[traj_idx]
         else:  # stick to the current trajectory
             traj_idx = self.ref_traj_idx
             distances = np.sqrt(
                 np.sum(
-                    (self.demo_trajs[self.ref_traj_idx][:, : self.x_dim] - x_state)
-                    ** 2,
+                    (self.x[self.ref_traj_idx] - x_state) ** 2,
                     axis=1,
                 )
             )
             point_idx = np.argmin(distances)
 
-        point_idx = min(point_idx + lookahead, self.demo_trajs[traj_idx].shape[0] - 1)
+        point_idx = min(point_idx + self.lookahead, self.x[traj_idx].shape[0] - 1)
 
         return int(traj_idx), int(point_idx)
+
+    def update_demo_traj_probs(
+        self, x_state: np.ndarray, radius: float, penalty: float, lookahead: int = None
+    ):
+        """
+        Update the trajectory probabilities based on proximity to the current state.
+
+        Args:
+            x_state: np.ndarray - Current position state (x, y, z)
+            radius: float - Threshold distance to consider a trajectory point as "close"
+            penalty: float - Factor to reduce probability for trajectories with no close points
+            lookahead: int - Number of steps to lookahead for reference trajectory selection, if None, use self.lookahead, otherwise update self.lookahead
+        Returns:
+            None - Updates self.demo_traj_probs in-place
+        """
+        if lookahead is not None:
+            self.lookahead = lookahead
+
+        for i, traj in enumerate(self.x):
+            distances = np.sqrt(np.sum((traj - x_state) ** 2, axis=1))
+            if np.any(distances < radius):
+                self.demo_traj_probs[i] *= penalty
+
+        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(x_state, True)
