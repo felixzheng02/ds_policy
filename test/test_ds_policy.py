@@ -221,21 +221,22 @@ if __name__ == "__main__":
     if (
         True
     ):  # this will save trajectory data. use False to directlly animate without simulating every time
-        x, x_dot, q, omega = load_data("custom")
+        option = "move_towards"
+        x, x_dot, q, omega = load_data("custom", option)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
         demo_traj_probs[1] = 0
         ds_policy = DSPolicy(
-            x, x_dot, q, omega, dt=1 / 60, switch=True, demo_traj_probs=demo_traj_probs
+            x, x_dot, q, omega, dt=1 / 60, switch=True, demo_traj_probs=demo_traj_probs, use_avg=True
         )
         # ds_policy.train_model(save_path="DS-Policy/models/mlp_width256_depth6_pos_quat.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=True)
         # ds_policy.load_model(model_path="DS-Policy/models/mlp_width256_depth5_test.pt")
         # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
         ds_policy.load_pos_model(
-            pos_model_path="DS-Policy/models/mlp_width128_depth3.pt"
+            pos_model_path=f"DS-Policy/models/mlp_width128_depth3_{option}.pt"
         )
         ds_policy.train_quat_model(
-            save_path="DS-Policy/models/quat_model.json", k_init=10
+            save_path=f"DS-Policy/models/quat_model_{option}.json", k_init=10
         )
         # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
         simulator = Simulator(ds_policy)

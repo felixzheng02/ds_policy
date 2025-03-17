@@ -66,6 +66,7 @@ class DSPolicy:
         lookahead: int = 5,
         demo_traj_probs: np.ndarray = None,
         backtrack_steps: int = 0,
+        use_avg: bool = True
     ):
         """
         Args:
@@ -115,6 +116,8 @@ class DSPolicy:
             [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         )
 
+        self.use_avg = use_avg
+
     def load_model(self, model_path: str):
         model_name = os.path.basename(model_path)
         width_str = model_name.split("width")[1].split("_")[0]
@@ -130,7 +133,7 @@ class DSPolicy:
         save_path: str,
         batch_size: int = 1,
         lr_strategy: tuple = (1e-3, 1e-4, 1e-5),
-        steps_strategy: tuple = (5000, 5000, 5000),
+        epoch_strategy: tuple = (100, 100, 100),
         length_strategy: tuple = (0.4, 0.7, 1),
         plot: bool = True,
         print_every: int = 100,
@@ -140,7 +143,7 @@ class DSPolicy:
             save_path: path to save the trained model
             batch_size: number of trajectories to train on at a time
             lr_strategy: learning rate in each phase
-            steps_strategy: number of steps in each phase
+            epoch_strategy: number of epochs in each phase
             length_strategy: fraction of the trajectories available for training in each phase
             plot: whether to plot the training progress
             print_every: print the training progress every print_every steps
@@ -161,7 +164,7 @@ class DSPolicy:
             save_path,
             batch_size=batch_size,
             lr_strategy=lr_strategy,
-            steps_strategy=steps_strategy,
+            epoch_strategy=epoch_strategy,
             length_strategy=length_strategy,
             width_size=width_size,
             depth=depth,
@@ -173,7 +176,7 @@ class DSPolicy:
     def load_pos_model(self, pos_model_path: str):
         pos_model_name = os.path.basename(pos_model_path)
         width_str = pos_model_name.split("width")[1].split("_")[0]
-        depth_str = pos_model_name.split("depth")[1].split(".")[0]
+        depth_str = pos_model_name.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
         self.pos_model = NeuralODE(self.x_dim, width_size, depth)
@@ -194,7 +197,7 @@ class DSPolicy:
         save_path: str,
         batch_size: int = 1,
         lr_strategy: tuple = (1e-3, 1e-4, 1e-5),
-        steps_strategy: tuple = (5000, 5000, 5000),
+        epoch_strategy: tuple = (100, 100, 100),
         length_strategy: tuple = (0.4, 0.7, 1),
         plot: bool = True,
         print_every: int = 100,
@@ -204,23 +207,22 @@ class DSPolicy:
             save_path: path to save the trained model
             batch_size: number of trajectories to train on at a time
             lr_strategy: learning rate in each phase
-            steps_strategy: number of steps in each phase
+            epoch_strategy: number of epochs in each phase
             length_strategy: fraction of the trajectories available for training in each phase
             plot: whether to plot the training progress
             print_every: print the training progress every print_every steps
         """
         width_str = save_path.split("width")[1].split("_")[0]
-        depth_str = save_path.split("depth")[1].split(".")[0]
+        depth_str = save_path.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
         self.pos_model = train(
-            self.demo_pos,
-            self.demo_vel,
+            self.x,
+            self.x_dot,
             save_path,
-            data_size=self.x_dim,
             batch_size=batch_size,
             lr_strategy=lr_strategy,
-            steps_strategy=steps_strategy,
+            epoch_strategy=epoch_strategy,
             length_strategy=length_strategy,
             width_size=width_size,
             depth=depth,
@@ -243,8 +245,41 @@ class DSPolicy:
         # )
         # self.pos_backtrack_model.eval()
 
-    def model_forward(self, state: np.ndarray):
-        if self.model is None:  # pos_model and quat_model are separate
+    def get_action_raw(self, state: np.ndarray):
+        if self.use_avg:
+            # Find all points from self.x whose distance is close to current state
+            x_curr = state[:self.x_dim]
+            close_points_velocities = []
+            
+            # Define a distance threshold for "close" points
+            distance_threshold = 0.1  # This can be adjusted as needed
+            
+            # Iterate through each trajectory
+            for traj_idx, traj in enumerate(self.x):
+                # Calculate distances from current state to each point in trajectory
+                distances = np.sqrt(np.sum((traj - x_curr) ** 2, axis=1))
+                
+                # Find indices of close points
+                close_indices = np.where(distances < distance_threshold)[0]
+                
+                # Add corresponding velocities to our collection
+                for idx in close_indices:
+                    close_points_velocities.append(self.x_dot[traj_idx][idx])
+            
+            # If no close points found, use the model directly
+            if len(close_points_velocities) == 0:
+                x_dot = np.zeros(self.x_dim)
+            else:
+                # Average the velocities of close points
+                x_dot = np.mean(np.array(close_points_velocities), axis=0)
+            
+            # Get orientation part
+            q_curr = R.from_quat(state[self.x_dim:])
+            _, _, omega = self.quat_model._step(q_curr, self.dt)            
+
+            return np.concatenate([x_dot, omega])
+
+        elif self.model is None:  # pos_model and quat_model are separate
             with torch.no_grad():
                 x_dot = self.pos_model.forward(state[: self.x_dim]).numpy()
 
@@ -383,13 +418,13 @@ class DSPolicy:
         if lookahead is not None:
             self.lookahead = lookahead
 
-        action_from_model = self.model_forward(
+        action_raw = self.get_action_raw(
             state
-        )  # action from model, with no CLF/CBF
+        )
         if clf:
-            action = self.apply_clf(state, action_from_model, alpha_V)
+            action = self.apply_clf(state, action_raw, alpha_V)
         else:
-            action = action_from_model
+            action = action_raw
         return action
 
     def apply_clf(

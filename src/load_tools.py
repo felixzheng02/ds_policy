@@ -6,7 +6,7 @@ from scipy.spatial.transform import Rotation as R
 from scipy.spatial.transform import RotationSpline as RS
 
 
-def load_data(input_opt):
+def load_data(input_opt, option=None):
     """
     Return:
     -------
@@ -206,6 +206,10 @@ def load_data(input_opt):
 
     elif input_opt == "custom":
         print("\nYou selected custom data.\n")
+        if option == "move_towards":
+            seg_num_int = 0
+        elif option == "move_away":
+            seg_num_int = 1
         input_path = os.path.join(
             os.path.dirname(os.path.realpath(__file__)),
             "..",
@@ -250,7 +254,7 @@ def load_data(input_opt):
             # Load EEF and handle trajectory data for first segment
             demo_num = str(l).zfill(2)
             # Get segment number from user
-            seg_num = "0".zfill(2)
+            seg_num = str(seg_num_int).zfill(2)
             eef_traj = np.load(
                 os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")
             )
