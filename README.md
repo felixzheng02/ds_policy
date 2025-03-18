@@ -41,11 +41,11 @@ model_config = {
         # Either use average velocities
         # 'use_avg': True,
         # Or specify load_path to load an existing model
-        'load_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt",
+        'load_path': f"ds_policy/models/mlp_width128_depth3.pt",
         # Or provide training parameters if model doesn't exist yet
         # 'width': 128,
         # 'depth': 3,
-        # 'save_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt",
+        # 'save_path': f"ds_policy/models/mlp_width128_depth3.pt",
         # 'batch_size': 100,
         # 'device': "cpu",  # Can be "cpu", "cuda", or "mps"
         # 'lr_strategy': (1e-3, 1e-4, 1e-5),
@@ -56,9 +56,9 @@ model_config = {
     },
     'quat_model': {
         # Either use load_path
-        # 'load_path': f"ds_policy/models/quat_model_{option}.json",
+        # 'load_path': f"ds_policy/models/quat_model.json",
         # Or specify training parameters
-        'save_path': f"ds_policy/models/quat_model_{option}.json",
+        'save_path': f"ds_policy/models/quat_model.json",
         'k_init': 10
     }
 }
