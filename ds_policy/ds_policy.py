@@ -3,34 +3,21 @@ import sys
 import logging
 import time
 
-sys.path.append(
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "ds_policy/src/",
-    )
-)
-from neural_ode import NeuralODE
+from .neural_ode.neural_ode import NeuralODE
 import numpy as np
 import torch
 from jaxopt import OSQP
 import jax
 import jax.numpy as jnp
-from scipy import sparse  # Add this import for sparse matrices
+from scipy import sparse
 import json
 from scipy.spatial.transform import Rotation as R
 
-from train_neural_ode import train
-from ds_utils import quat_mult, Quaternion
-
-sys.path.append(
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "se3_lpvds/src/quaternion_ds",
-    )
-)
-from src.gmm_class import gmm_class
-from src.quat_class import quat_class
-from src.util.process_tools import (
+from .neural_ode.train_neural_ode import train
+from .ds_utils import quat_mult, Quaternion
+from .so3_lpvds.gmm_class import gmm_class
+from .so3_lpvds.quat_class import quat_class
+from .so3_lpvds.process_tools import (
     pre_process,
     compute_output,
     extract_state,

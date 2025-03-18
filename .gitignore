@@ -176,11 +176,12 @@ cython_debug/
 # Custom data directory
 custom_data/
 
-# Explicitly ignore Python cache in src directory
-src/__pycache__/
-src/**/__pycache__/
-src/**/*.py[cod]
+# Explicitly ignore Python cache in package directory
+ds_policy/__pycache__/
+ds_policy/**/__pycache__/
+ds_policy/**/*.py[cod]
 
+# Media and model files
 *.png
 *.jpg
 *.jpeg
@@ -188,6 +189,37 @@ src/**/*.py[cod]
 *.bmp
 *.tiff
 *.ico
+*.pt
+*.pth
+*.h5
+*.pkl
+*.npy
+*.npz
 
+# Built documentation
+docs/build/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Specific directories
 models/
 data/
+
+# Package build directories
+ds_policy.egg-info/
+dist/
+build/

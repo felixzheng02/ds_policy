@@ -3,11 +3,9 @@ import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.ds_policy import DSPolicy
-from src.load_tools import load_data
-from src.ds_utils import quat_to_euler
-
+from ds_policy.ds_policy import DSPolicy
+from ds_policy.load_tools import load_data
+from ds_policy.ds_utils import quat_to_euler
 from test_ds_policy import Simulator, Animator
 
 

@@ -1,6 +1,5 @@
 import time
 import os
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -8,12 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 
-from load_tools import load_data
-from neural_ode import NeuralODE
+# Import from parent directory
+from .. import load_tools
+from .neural_ode import NeuralODE
 
-# Set up device for training
-# device = "cpu"
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+device = torch.device("cuda" if torch.cuda.is_available() else
+                      "mps" if torch.backends.mps.is_available() else 
+                      "cpu")
 print(f"Using device: {device}")
 
 
@@ -457,7 +458,7 @@ def label_pred_comparison(
 if __name__ == "__main__":
     width_size = 256
     depth = 5
-    x, x_dot, quat, omega = load_data("custom")
+    x, x_dot, quat, omega = load_tools.load_data("custom")
 
     x_pos = x
     x_dot_pos = x_dot

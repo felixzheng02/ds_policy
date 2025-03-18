@@ -6,13 +6,9 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from scipy.spatial.transform import Rotation as R
 
-# Add the parent directory to sys.path to allow imports from src
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# Now import from src
-from src.ds_policy import DSPolicy
-from src import ds_utils
-from src.load_tools import load_data
+from ds_policy.ds_policy import DSPolicy
+from ds_policy import ds_utils
+from ds_policy.load_tools import load_data
 
 
 class Simulator:

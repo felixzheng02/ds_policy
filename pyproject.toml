@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ds_policy"
+version = "0.1.0"
+description = "Dynamical System Policy for robot control"
+readme = "README.md"
+authors = [
+    {name = "Felix"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+# Uncomment and add URLs when available
+# [project.urls]
+# "Homepage" = "https://github.com/username/ds_policy"
+# "Bug Tracker" = "https://github.com/username/ds_policy/issues" 

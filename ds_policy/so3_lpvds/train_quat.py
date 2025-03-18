@@ -7,24 +7,16 @@ from scipy.spatial.transform import Rotation as R
 import glob
 import json
 
-# Add the quaternion_ds package to sys.path to import it
-sys.path.append(
-    os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "se3_lpvds/src/quaternion_ds",
-    )
-)
 
-from src.util.plot_tools import plot_gmm, plot_gamma, plot_omega
-from src.util.process_tools import (
+from .plot_tools import plot_gmm, plot_gamma, plot_omega
+from .process_tools import (
     pre_process,
     compute_output,
     extract_state,
     rollout_list,
 )
-from src.quat_class import quat_class
-from src.gmm_class import gmm_class
-from load_tools import load_data
+from .quat_class import quat_class
+from .gmm_class import gmm_class
 
 
 def load_quat_model(model_path="models/quat_model.json"):
