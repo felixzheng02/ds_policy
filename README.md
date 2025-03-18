@@ -20,7 +20,7 @@ conda create -n <env_name> python=3.10.16
 conda activate <env_name>
 
 # Clone the repository
-git clone <repository_url>
+git clone https://github.com/felixzheng02/ds_policy
 cd ds_policy
 
 # Install the package
