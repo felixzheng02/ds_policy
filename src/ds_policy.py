@@ -6,7 +6,7 @@ import time
 sys.path.append(
     os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "DS-Policy/src/",
+        "DSPolicy/src/",
     )
 )
 from neural_ode import NeuralODE
@@ -48,11 +48,22 @@ def qp_solve(Q_opt, G_opt, h_opt):
 
 class DSPolicy:
     """
-    NOTE: train_model/load_model uses a neural ODE for both position and orientation.
-          train_pos_model/load_pos_model uses a neural ODE for position only.
-          train_quat_model/load_quat_model uses a SE3 LPVDS for orientation only.
-          Both position and orientation models have to be trained/loaded before get_action
-    get_action(state: np.ndarray(n_dims)) -> (dx, dy, dz, droll, dpitch, dyaw)
+    Public methods:
+        __init__: Initialize the DS policy with demonstration data and model configuration
+        get_action: Generate control action for a given state
+        update_demo_traj_probs: Update trajectory probabilities based on collision detection
+    Private methods (should not be called externally):
+        _load_node: Load a pre-trained Neural ODE model from disk
+        _train_node: Train a Neural ODE model on demonstration data
+        _get_action_raw: Generate a raw control action for the given state without CLF constraints
+        _compute_vel: Compute velocities from trajectory positions using finite differences
+        _train_so3_lpvds: Train an SO3-LPVDS model for quaternion orientation control
+        _load_so3_lpvds: Load a pre-trained SO3-LPVDS model for quaternion orientation control
+        _quat_data_preprocess: Preprocess the quaternion data for the SO3-LPVDS model
+        _apply_clf: Apply the Control Lyapunov Function (CLF) constraints to the control action
+        _choose_ref: Choose the reference trajectory and point based on the current position
+        _configure_models: Configure the models based on the provided configuration dictionary
+        _validate_model_setup: Validate that the models are properly configured
     """
 
     def __init__(
@@ -61,23 +72,39 @@ class DSPolicy:
         x_dot: list[np.ndarray],
         quat: list[np.ndarray],
         omega: list[np.ndarray],
+        model_config: dict,
         dt: float = 0.01,
         switch: bool = False,
         lookahead: int = 5,
         demo_traj_probs: np.ndarray = None,
         backtrack_steps: int = 0,
-        use_avg: bool = True
+        **kwargs
     ):
         """
+        Initialize the Dynamical System Policy with demonstration data and model configuration.
+        
         Args:
-            x: list of position trajectories
-            x_dot: list of velocity trajectories
-            quat: list of quaternion trajectories
-            omega: list of angular velocity trajectories
-            dt: Time step
-            switch: If True, allows switching between trajectories at runtime. If False, sticks to initially chosen trajectory.
+            x: List of position trajectories from demonstrations
+            x_dot: List of velocity trajectories from demonstrations
+            quat: List of quaternion trajectories from demonstrations
+            omega: List of angular velocity trajectories from demonstrations
+            model_config: Configuration dictionary for models with structure:
+                - unified_model (dict, optional): Configuration for unified position+orientation model
+                    - load_path (str, optional): Path to load pre-trained model
+                    - [training parameters if not loading]
+                - pos_model (dict, optional): Configuration for position-only model
+                    - load_path (str, optional): Path to load pre-trained model
+                    - use_avg (bool, optional): Whether to use averaging instead of model
+                    - [training parameters if not loading]
+                - quat_model (dict, optional): Configuration for orientation-only model
+                    - load_path (str, optional): Path to load pre-trained model
+                    - [training parameters if not loading]
+            dt: Time step for simulation and prediction
+            switch: If True, allows switching between trajectories at runtime
             lookahead: Number of steps to lookahead for reference trajectory selection
-            backtrack_steps: Number of steps to backtrack on collision, TODO: not used
+            demo_traj_probs: Prior probabilities for each demonstration trajectory
+            backtrack_steps: Number of steps to backtrack on collision
+            **kwargs: Additional keyword arguments
         """
         self.x_dim = 3
         self.r_dim = 4
@@ -90,19 +117,16 @@ class DSPolicy:
         self.lookahead = lookahead
         self.backtrack_steps = backtrack_steps
 
-        self.demo_traj_probs = (
-            np.ones(len(x)) if demo_traj_probs is None else demo_traj_probs
-        )
-
+        self.demo_traj_probs = np.ones(len(x)) if demo_traj_probs is None else demo_traj_probs
         self.ref_traj_idx = None
         self.ref_point_idx = None
 
-        # models
-        self.model = None
-        self.model_reverse = None
+        # Initialize models to None
+        self.model = None  # unified model
         self.pos_model = None
-        self.pos_model_reverse = None
         self.quat_model = None
+        
+        # Process data for quat model
         (
             self.p_in,
             self.q_in,
@@ -112,56 +136,135 @@ class DSPolicy:
             self.q_init,
             self.p_att,
             self.q_att,
-        ) = self.quad_data_preprocess(
+        ) = self._quat_data_preprocess(
             [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         )
 
-        self.use_avg = use_avg
+        self.use_avg = False
+        self._configure_models(model_config)
+        self._validate_model_setup()
 
-    def load_model(self, model_path: str):
+    def get_action(
+        self,
+        state: np.ndarray,
+        clf: bool = True,
+        alpha_V: float = 20.0,
+        lookahead: int = None,
+    ) -> np.ndarray:
+        """
+        Generate a control action for the given state.
+        
+        Computes a velocity command based on the current state, using the configured models.
+        Can optionally apply Control Lyapunov Function (CLF) constraints for stability.
+        
+        Args:
+            state: Current state vector [position (3), quaternion (4)]
+            clf: If True, apply Control Lyapunov Function constraints
+            alpha_V: CLF convergence rate parameter
+            lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
+            
+        Returns:
+            action: Control action [linear velocity (3), angular velocity (3)]
+        """
+        if lookahead is not None:
+            self.lookahead = lookahead
+
+        action_raw = self._get_action_raw(
+            state
+        )
+        if clf:
+            action = self._apply_clf(state, action_raw, alpha_V)
+        else:
+            action = action_raw
+        return action
+    
+    def update_demo_traj_probs(
+        self, x_state: np.ndarray, radius: float, penalty: float, lookahead: int = None
+    ):
+        """
+        Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
+        
+        Args:
+            x_state: Current position state (x, y, z)
+            radius: Threshold distance to consider a trajectory point as "close"
+            penalty: Factor to reduce probability for trajectories with close points
+            lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
+        """
+        if lookahead is not None:
+            self.lookahead = lookahead
+
+        for i, traj in enumerate(self.x):
+            distances = np.sqrt(np.sum((traj - x_state) ** 2, axis=1))
+            if np.any(distances < radius):
+                self.demo_traj_probs[i] *= penalty
+
+        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(x_state, True)
+
+    def _load_node(self, model_path: str, input_dim: int) -> NeuralODE:
+        """
+        Load a pre-trained Neural ODE model from disk.
+        
+        Args:
+            model_path: Path to the saved model file
+            input_dim: Dimension of the input to the model
+            
+        Returns:
+            loaded_model: Loaded Neural ODE model
+        """
         model_name = os.path.basename(model_path)
         width_str = model_name.split("width")[1].split("_")[0]
         depth_str = model_name.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
-        self.model = NeuralODE(self.x_dim + self.r_dim, width_size, depth)
-        self.model.load_state_dict(torch.load(model_path, weights_only=True))
-        self.model.eval()
+        
+        model = NeuralODE(input_dim, width_size, depth)
+        model.load_state_dict(torch.load(model_path, weights_only=True))
+        model.to('cpu')
+        model.eval()
 
-    def train_model(
+        return model
+
+    def _train_node(
         self,
+        input_data: list[np.ndarray],
+        output_data: list[np.ndarray],
         save_path: str,
+        device: str = "cpu",
         batch_size: int = 1,
         lr_strategy: tuple = (1e-3, 1e-4, 1e-5),
         epoch_strategy: tuple = (100, 100, 100),
         length_strategy: tuple = (0.4, 0.7, 1),
         plot: bool = True,
         print_every: int = 100,
-    ):
+    ) -> NeuralODE:
         """
+        Train a Neural ODE model on demonstration data.
+        
         Args:
-            save_path: path to save the trained model
-            batch_size: number of trajectories to train on at a time
-            lr_strategy: learning rate in each phase
-            epoch_strategy: number of epochs in each phase
-            length_strategy: fraction of the trajectories available for training in each phase
-            plot: whether to plot the training progress
-            print_every: print the training progress every print_every steps
+            input_data: List of input trajectories for training
+            output_data: List of output trajectories for training
+            save_path: Path to save the trained model
+            device: Device to run the training on
+            batch_size: Number of trajectories to process in each batch
+            lr_strategy: Learning rates for each training phase
+            epoch_strategy: Number of epochs for each training phase
+            length_strategy: Fraction of trajectories to use in each phase
+            plot: Whether to plot training progress
+            print_every: Print training metrics every N steps
+            
+        Returns:
+            trained_model: Trained Neural ODE model
         """
         width_str = save_path.split("width")[1].split("_")[0]
         depth_str = save_path.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
-        self.model = train(
-            [
-                np.concatenate([self.x[i], self.quat[i]], axis=-1)
-                for i in range(len(self.x))
-            ],
-            [
-                np.concatenate([self.x_dot[i], self.omega[i]], axis=-1)
-                for i in range(len(self.x_dot))
-            ],
+        
+        model = train(
+            input_data,
+            output_data,
             save_path,
+            device=device,
             batch_size=batch_size,
             lr_strategy=lr_strategy,
             epoch_strategy=epoch_strategy,
@@ -171,81 +274,26 @@ class DSPolicy:
             plot=plot,
             print_every=print_every,
         )
-        self.model.eval()
+        model.to('cpu')
+        model.eval()
+        
+        return model
 
-    def load_pos_model(self, pos_model_path: str):
-        pos_model_name = os.path.basename(pos_model_path)
-        width_str = pos_model_name.split("width")[1].split("_")[0]
-        depth_str = pos_model_name.split("depth")[1].split("_")[0]
-        width_size = int(width_str)
-        depth = int(depth_str)
-        self.pos_model = NeuralODE(self.x_dim, width_size, depth)
-        self.pos_model.load_state_dict(torch.load(pos_model_path, weights_only=True))
-        self.pos_model.eval()
-
-        # pos_backtrack_model_name = os.path.basename(pos_backtrack_model_path)
-        # width_str = pos_backtrack_model_name.split("width")[1].split("_")[0]
-        # depth_str = pos_backtrack_model_name.split("depth")[1].split(".")[0]
-        # width_size = int(width_str)
-        # depth = int(depth_str)
-        # self.pos_backtrack_model = NeuralODE(self.x_dim, width_size, depth)
-        # self.pos_backtrack_model.load_state_dict(torch.load(pos_backtrack_model_path, weights_only=True))
-        # self.pos_backtrack_model.eval()
-
-    def train_pos_model(
-        self,
-        save_path: str,
-        batch_size: int = 1,
-        lr_strategy: tuple = (1e-3, 1e-4, 1e-5),
-        epoch_strategy: tuple = (100, 100, 100),
-        length_strategy: tuple = (0.4, 0.7, 1),
-        plot: bool = True,
-        print_every: int = 100,
-    ):
+    def _get_action_raw(self, state: np.ndarray):
         """
+        Generate a raw control action for the given state without CLF constraints.
+        
+        Uses one of three approaches based on configuration:
+        1. Velocity averaging for position + SO3-LPVDS for orientation
+        2. Neural ODE for position + SO3-LPVDS for orientation
+        3. Unified Neural ODE for both position and orientation
+        
         Args:
-            save_path: path to save the trained model
-            batch_size: number of trajectories to train on at a time
-            lr_strategy: learning rate in each phase
-            epoch_strategy: number of epochs in each phase
-            length_strategy: fraction of the trajectories available for training in each phase
-            plot: whether to plot the training progress
-            print_every: print the training progress every print_every steps
+            state: Current state vector [position (3), quaternion (4)]
+            
+        Returns:
+            action: Raw control action [linear velocity (3), angular velocity (3)]
         """
-        width_str = save_path.split("width")[1].split("_")[0]
-        depth_str = save_path.split("depth")[1].split("_")[0]
-        width_size = int(width_str)
-        depth = int(depth_str)
-        self.pos_model = train(
-            self.x,
-            self.x_dot,
-            save_path,
-            batch_size=batch_size,
-            lr_strategy=lr_strategy,
-            epoch_strategy=epoch_strategy,
-            length_strategy=length_strategy,
-            width_size=width_size,
-            depth=depth,
-            plot=plot,
-            print_every=print_every,
-        )
-        self.pos_model.eval()
-        # self.pos_backtrack_model = train(
-        #     [np.flip(pos, axis=0) for pos in self.demo_pos],
-        #     [np.flip(vel, axis=0) for vel in self.demo_vel],
-        #     save_path+"_backtrack",
-        #     data_size=self.x_dim,
-        #     batch_size=batch_size,
-        #     lr_strategy=lr_strategy,
-        #     steps_strategy=steps_strategy,
-        #     length_strategy=length_strategy,
-        #     width_size=width_size,
-        #     depth=depth,
-        #     plot=plot,
-        # )
-        # self.pos_backtrack_model.eval()
-
-    def get_action_raw(self, state: np.ndarray):
         if self.use_avg:
             # Find all points from self.x whose distance is close to current state
             x_curr = state[:self.x_dim]
@@ -292,17 +340,29 @@ class DSPolicy:
             with torch.no_grad():
                 return self.model.forward(state).numpy()
 
-    def compute_vel(self, x: np.ndarray):
+    def _compute_vel(self, x: np.ndarray):
         """
-        Compute velocities from trajectories
-        NOTE: not used
+        Compute velocities from trajectory positions using finite differences.
+        
+        Args:
+            x: Trajectory positions
+            
+        Returns:
+            x_dot: Computed velocities
         """
         x_dot = np.diff(x, axis=0) / self.dt
         x_dot = np.vstack([x_dot, x_dot[-1]])
 
         return x_dot
 
-    def train_quat_model(self, save_path: str, k_init: int = 10):
+    def _train_so3_lpvds(self, save_path: str, k_init: int = 10):
+        """
+        Train an SO3-LPVDS model for quaternion orientation control.
+        
+        Args:
+            save_path: Path to save the trained model
+            k_init: Initial number of Gaussian components for the model
+        """
         quat_obj = quat_class(
             self.q_in,
             self.q_out,
@@ -318,7 +378,13 @@ class DSPolicy:
 
         self.quat_model = quat_obj
 
-    def load_quat_model(self, model_path: str):
+    def _load_so3_lpvds(self, model_path: str):
+        """
+        Load a pre-trained SO3-LPVDS model for quaternion orientation control.
+        
+        Args:
+            model_path: Path to the saved model file
+        """
         with open(model_path, "r") as f:
             model_data = json.load(f)
 
@@ -355,7 +421,7 @@ class DSPolicy:
         self.quat_model.dt = dt
         self.quat_model.q_att = q_att
 
-    def quad_data_preprocess(self, trajs: list[np.ndarray]) -> tuple[
+    def _quat_data_preprocess(self, trajs: list[np.ndarray]) -> tuple[
         np.ndarray,
         np.ndarray,
         np.ndarray,
@@ -365,6 +431,18 @@ class DSPolicy:
         np.ndarray,
         np.ndarray,
     ]:
+        """
+        Preprocess quaternion trajectory data for SO3-LPVDS training.
+        
+        Converts raw demonstration data into the format required by the SO3-LPVDS model.
+        
+        Args:
+            trajs: List of trajectories containing position and quaternion data
+            
+        Returns:
+            Tuple containing processed position and orientation data:
+            (p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att)
+        """
         p_raw = []  # Position trajectories
         q_raw = []  # Orientation trajectories
         t_raw = []  # Time vectors
@@ -399,41 +477,27 @@ class DSPolicy:
 
         return p_in, q_in, p_out, q_out, p_init, q_init, p_att, q_att
 
-    def get_action(
-        self,
-        state: np.ndarray,
-        clf: bool = True,
-        alpha_V: float = 20.0,
-        lookahead: int = None,
-    ) -> np.ndarray:
-        """
-        Args:
-            state: position + quaternion
-            clf: if True, apply CLF
-            alpha_V: CLF parameter
-            lookahead: Number of steps to lookahead for reference trajectory selection, if None, use self.lookahead, otherwise update self.lookahead
-        Returns:
-            action: np.ndarray(dx, dy, dz, droll, dpitch, dyaw)
-        """
-        if lookahead is not None:
-            self.lookahead = lookahead
-
-        action_raw = self.get_action_raw(
-            state
-        )
-        if clf:
-            action = self.apply_clf(state, action_raw, alpha_V)
-        else:
-            action = action_raw
-        return action
-
-    def apply_clf(
+    def _apply_clf(
         self,
         current_state: np.ndarray,
         action_from_model: np.ndarray,
         alpha_V: float,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(
+    ) -> np.ndarray:
+        """
+        Apply Control Lyapunov Function (CLF) constraints to ensure stability.
+        
+        Uses quadratic programming to find the minimal adjustment to the model's
+        output that satisfies stability constraints.
+        
+        Args:
+            current_state: Current state vector [position (3), quaternion (4)]
+            action_from_model: Raw action from the model
+            alpha_V: CLF convergence rate parameter
+            
+        Returns:
+            action: Modified action that satisfies CLF constraints
+        """
+        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(
             current_state[: self.x_dim], self.switch
         )
         ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
@@ -442,11 +506,16 @@ class DSPolicy:
 
         if (
             self.model is None
-        ):  # pos_model and quat_model are separate, only apply to pos_model
+        ):  # using so3-lpvds for orientation control, only need to apply clf to position
             current_x = current_state[: self.x_dim]
             f_x = action_from_model[: self.x_dim]
-            with torch.no_grad():
-                f_xref = jnp.array(self.pos_model.forward(ref_x))
+            if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
+                f_xref = 0
+            elif self.use_avg:
+                f_xref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
+            else:
+                with torch.no_grad():
+                    f_xref = jnp.array(self.pos_model.forward(ref_x))
 
             error = jnp.array(current_x) - jnp.array(ref_x)
 
@@ -578,20 +647,20 @@ class DSPolicy:
 
             return x_dot_cmd
 
-    def choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int]:
+    def _choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int]:
         """
-        Choose ref_traj_idx and ref_point_idx based on state.
-        Criteria:
-            - for each demo trajectory i, compute smallest distance to x_state among all its points: closest_distances[i], corresponding point index: closest_indices[i]
-            - score[i] = log(p[i]) - closest_distances[i] TODO: this could be modified
-            - prob_dist = softmax(score)
-            - choose traj_idx = argmax(prob_dist), point_idx = closest_indices[traj_idx]
+        Choose reference trajectory and point based on current position.
+        
+        Selects the most appropriate demonstration trajectory and point within it
+        to serve as a reference for the control system.
+        
         Args:
-            x_state: np.ndarray(x_dim)
-            switch: bool, if False, sticks to the current trajectory
+            x_state: Current position state (x, y, z)
+            switch: If True, allows switching between trajectories
+            
         Returns:
-            ref_traj_idx: int
-            point_idx within the traj: int
+            ref_traj_idx: Index of the selected reference trajectory
+            ref_point_idx: Index of the selected point within the trajectory
         """
         if switch or self.ref_traj_idx is None:
             # Calculate distances from current state to each point in each trajectory
@@ -627,26 +696,134 @@ class DSPolicy:
 
         return int(traj_idx), int(point_idx)
 
-    def update_demo_traj_probs(
-        self, x_state: np.ndarray, radius: float, penalty: float, lookahead: int = None
-    ):
+    def _configure_models(self, model_config):
         """
-        Update the trajectory probabilities based on proximity to the current state.
-
+        Configure models based on the provided configuration dictionary.
+        
+        Sets up the appropriate models for position and orientation control
+        based on the configuration provided during initialization.
+        
         Args:
-            x_state: np.ndarray - Current position state (x, y, z)
-            radius: float - Threshold distance to consider a trajectory point as "close"
-            penalty: float - Factor to reduce probability for trajectories with no close points
-            lookahead: int - Number of steps to lookahead for reference trajectory selection, if None, use self.lookahead, otherwise update self.lookahead
-        Returns:
-            None - Updates self.demo_traj_probs in-place
+            model_config: Dictionary containing model configurations
         """
-        if lookahead is not None:
-            self.lookahead = lookahead
+        # Configure unified model if specified
+        if 'unified_model' in model_config:
+            unified_config = model_config['unified_model']
+            
+            # Check if loading pre-trained model
+            if 'load_path' in unified_config:
+                self.model = self._load_node(unified_config['load_path'], self.x_dim + self.r_dim)
+            else:
+                # Training configuration
+                width = unified_config.get('width', 128)
+                depth = unified_config.get('depth', 3)
+                save_path = unified_config.get('save_path', f'./models/unified_model_width{width}_depth{depth}.pt')
+                batch_size = unified_config.get('batch_size', 1)
+                device = unified_config.get('device', 'cpu')
+                lr_strategy = unified_config.get('lr_strategy', (1e-3, 1e-4, 1e-5))
+                epoch_strategy = unified_config.get('epoch_strategy', (100, 100, 100))
+                length_strategy = unified_config.get('length_strategy', (0.4, 0.7, 1))
+                plot = unified_config.get('plot', True)
+                print_every = unified_config.get('print_every', 100)
+                
+                # Create combined input and output data for unified model
+                input_data = [
+                    np.concatenate([self.x[i], self.quat[i]], axis=-1)
+                    for i in range(len(self.x))
+                ]
+                output_data = [
+                    np.concatenate([self.x_dot[i], self.omega[i]], axis=-1)
+                    for i in range(len(self.x_dot))
+                ]
+                
+                self.model = self._train_node(
+                    input_data,
+                    output_data,
+                    save_path,
+                    device=device,
+                    batch_size=batch_size,
+                    lr_strategy=lr_strategy,
+                    epoch_strategy=epoch_strategy,
+                    length_strategy=length_strategy,
+                    plot=plot,
+                    print_every=print_every
+                )
+            return
+        
+        # Configure position model if specified
+        if 'pos_model' in model_config:
+            pos_config = model_config['pos_model']
+            # Check for use_avg mode
+            self.use_avg = pos_config.get('use_avg', False)
+            
+            if not self.use_avg:
+                if 'load_path' in pos_config:
+                    self.pos_model = self._load_node(pos_config['load_path'], self.x_dim)
+                else:
+                    # Training configuration
+                    width = pos_config.get('width', 128)
+                    depth = pos_config.get('depth', 3)
+                    save_path = pos_config.get('save_path', f'./models/pos_model_width{width}_depth{depth}.pt')
+                    device = pos_config.get('device', 'cpu')
+                    batch_size = pos_config.get('batch_size', 1)
+                    lr_strategy = pos_config.get('lr_strategy', (1e-3, 1e-4, 1e-5))
+                    epoch_strategy = pos_config.get('epoch_strategy', (100, 100, 100))
+                    length_strategy = pos_config.get('length_strategy', (0.4, 0.7, 1))
+                    plot = pos_config.get('plot', True)
+                    print_every = pos_config.get('print_every', 100)
+                    
+                    self.pos_model = self._train_node(
+                        self.x,
+                        self.x_dot,
+                        save_path,
+                        device=device,
+                        batch_size=batch_size,
+                        lr_strategy=lr_strategy,
+                        epoch_strategy=epoch_strategy,
+                        length_strategy=length_strategy,
+                        plot=plot,
+                        print_every=print_every
+                    )
+        
+        # Configure quaternion model if specified
+        if 'quat_model' in model_config:
+            quat_config = model_config['quat_model']
+            
+            # Check if loading pre-trained model
+            if 'load_path' in quat_config:
+                self._load_so3_lpvds(quat_config['load_path'])
+            else:
+                # Training configuration
+                save_path = quat_config.get('save_path', './models/quat_model.json')
+                k_init = quat_config.get('k_init', 10)
+                
+                self._train_so3_lpvds(
+                    save_path=save_path,
+                    k_init=k_init
+                )
 
-        for i, traj in enumerate(self.x):
-            distances = np.sqrt(np.sum((traj - x_state) ** 2, axis=1))
-            if np.any(distances < radius):
-                self.demo_traj_probs[i] *= penalty
-
-        self.ref_traj_idx, self.ref_point_idx = self.choose_ref(x_state, True)
+    def _validate_model_setup(self):
+        """
+        Validate that the models are properly configured.
+        
+        Raises:
+            ValueError: If models are not properly configured
+        """
+        if self.use_avg:
+            # When using averaging, we still need quaternion model
+            if self.quat_model is None:
+                raise ValueError("Quaternion model is required when using velocity averaging mode")
+            return
+        
+        if self.model is not None:
+            # Unified model is configured, no need for separate models
+            return
+        
+        if self.pos_model is None or self.quat_model is None:
+            # Both position and quaternion models are required when not using unified model
+            missing = []
+            if self.pos_model is None:
+                missing.append("position")
+            if self.quat_model is None:
+                missing.append("quaternion")
+            raise ValueError(f"Missing required models: {', '.join(missing)}. Either configure a unified model or both position and quaternion models.")

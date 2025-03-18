@@ -220,26 +220,60 @@ class Animator:
 if __name__ == "__main__":
     if (
         True
-    ):  # this will save trajectory data. use False to directlly animate without simulating every time
+    ): # this will save trajectory data. use False to directlly animate without simulating every time
         option = "move_towards"
         x, x_dot, q, omega = load_data("custom", option)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
         demo_traj_probs[1] = 0
+
+        # Define model configuration using the new structure
+        model_config = {
+            'pos_model': {
+                # Either use average velocities
+                # 'use_avg': True,
+                # Or specify load_path to load an existing model
+                # 'load_path': f"DSPolicy/models/mlp_width128_depth3_{option}.pt",
+                # Or provide training parameters if model doesn't exist yet
+                'width': 128,
+                'depth': 3,
+                'save_path': f"DSPolicy/models/mlp_width128_depth3_{option}.pt",
+                'batch_size': 100,
+                'device': "cpu",  # Can be "cpu", "cuda", or "mps"
+                'lr_strategy': (1e-3, 1e-4, 1e-5),
+                'epoch_strategy': (10, 10, 10),
+                'length_strategy': (0.4, 0.7, 1),
+                'plot': True,
+                'print_every': 10
+            },
+            'quat_model': {
+                # Either use load_path
+                # 'load_path': f"DSPolicy/models/quat_model_{option}.json",
+                # Or specify training parameters
+                'save_path': f"DSPolicy/models/quat_model_{option}.json",
+                'k_init': 10
+            }
+            # Alternatively, you could use a unified model:
+            # 'unified_model': {
+            #     'load_path': f"DSPolicy/models/mlp_width256_depth5_unified_{option}.pt",
+            #     'device': "cpu" 
+            # }
+        }
+
+        # Initialize DS policy with the new model_config parameter
         ds_policy = DSPolicy(
-            x, x_dot, q, omega, dt=1 / 60, switch=True, demo_traj_probs=demo_traj_probs, use_avg=True
+            x=x, 
+            x_dot=x_dot, 
+            quat=q, 
+            omega=omega, 
+            model_config=model_config,
+            dt=1/60, 
+            switch=True, 
+            demo_traj_probs=demo_traj_probs
         )
-        # ds_policy.train_model(save_path="DS-Policy/models/mlp_width256_depth6_pos_quat.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(2000, 2000, 2000), length_strategy=(0.4, 0.7, 1), plot=True)
-        # ds_policy.load_model(model_path="DS-Policy/models/mlp_width256_depth5_test.pt")
-        # ds_policy.train_pos_model(save_path="DS-Policy/models/mlp_width128_depth3.pt", batch_size=1, lr_strategy=(1e-3, 1e-4, 1e-5), steps_strategy=(100, 100, 100), length_strategy=(0.4, 0.7, 1), plot=False)
-        ds_policy.load_pos_model(
-            pos_model_path=f"DS-Policy/models/mlp_width128_depth3_{option}.pt"
-        )
-        ds_policy.train_quat_model(
-            save_path=f"DS-Policy/models/quat_model_{option}.json", k_init=10
-        )
-        # ds_policy.load_quat_model(model_path="DS-Policy/models/quat_model.json") # TODO: this doesn't work for now
+
         simulator = Simulator(ds_policy)
+        
         # Randomly initialize starting point
         # Set random seed for reproducibility
         rng = np.random.default_rng(seed=3)
@@ -252,19 +286,21 @@ if __name__ == "__main__":
         init_state = np.concatenate(
             [np.array([init_pos_x, init_pos_y, init_pos_z]), init_euler]
         )
+        
         simulator.simulate(
             np.concatenate([x[1][0], ds_utils.quat_to_euler(q[1][0])]),
             # init_state,
-            "DS-Policy/data/test_ds_policy.npz",
+            "DSPolicy/data/test_ds_policy.npz",
             n_steps=100,
             clf=True,
             alpha_V=10,
-            lookahead=5,
+            lookahead=10,
         )
-    data = np.load("DS-Policy/data/test_ds_policy.npz", allow_pickle=True)
+    
+    # Load and visualize the results
+    data = np.load("DSPolicy/data/test_ds_policy.npz", allow_pickle=True)
     demo_trajs = data["demo_trajs"]
     traj = data["traj"]
     ref_traj_indices = data["ref_traj_indices"]
-    save_path = "DS-Policy/data/test_ds_policy_no_switch_no_backtrack.mp4"
     animator = Animator(traj, demo_trajs, ref_traj_indices)
     animator.animate(None)

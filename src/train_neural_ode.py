@@ -12,8 +12,8 @@ from load_tools import load_data
 from neural_ode import NeuralODE
 
 # Set up device for training
-device = "cpu"
-# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+# device = "cpu"
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 
@@ -256,6 +256,7 @@ def train(
     x: list[np.ndarray],
     x_dot: list[np.ndarray],
     save_path: str = None,
+    device: str = None,
     batch_size: int = 32,
     lr_strategy: tuple = (1e-3, 1e-3, 1e-3),
     epoch_strategy: tuple = (100, 100, 100),
@@ -272,6 +273,7 @@ def train(
         x: Training data. Each array can be of size (N, 3) or (N, 7).
         x_dot: Training velocity data. Each array can be of size (N, 3) or (N, 6).
         save_path: Path to save the trained model
+        device: Device to run the training on ("cpu", "cuda", "mps")
         batch_size: Number of samples to process in each training batch
         lr_strategy: Learning rate in each phase
         epoch_strategy: Number of epochs in each phase
@@ -281,6 +283,16 @@ def train(
         plot: Whether to plot the training progress
         print_every: Print the training progress every print_every epochs
     """
+    # Set default device if none provided
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else
+                              "mps" if torch.backends.mps.is_available() else 
+                              "cpu")
+    else:
+        device = torch.device(device)
+    
+    print(f"Using device: {device}")
+    
     data_size = x[0].shape[-1]
     if save_path is None:
         if data_size == 3:
