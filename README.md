@@ -42,8 +42,8 @@ omega = [np.random.rand(100, 3)]  # Angular velocity trajectories
 # Configure the model
 model_config = {
     'pos_model': {
-        # Either use average velocities
-        # 'use_avg': True,
+        # Either use special mode
+        # 'special_mode': 'none', # Can be "none", "avg"
         # Or specify load_path to load an existing model
         'load_path': f"ds_policy/models/mlp_width128_depth3.pt",
         # Or provide training parameters if model doesn't exist yet

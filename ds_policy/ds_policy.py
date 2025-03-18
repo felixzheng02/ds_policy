@@ -77,8 +77,8 @@ class DSPolicy:
                     - load_path (str, optional): Path to load pre-trained model
                     - [training parameters if not loading]
                 - pos_model (dict, optional): Configuration for position-only model
+                    - special_mode (str, optional): "none", "avg"
                     - load_path (str, optional): Path to load pre-trained model
-                    - use_avg (bool, optional): Whether to use averaging instead of model
                     - [training parameters if not loading]
                 - quat_model (dict, optional): Configuration for orientation-only model
                     - load_path (str, optional): Path to load pre-trained model
@@ -124,7 +124,8 @@ class DSPolicy:
             [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         )
 
-        self.use_avg = False
+        self.none = False
+        self.avg = False
         self._configure_models(model_config)
         self._validate_model_setup()
 
@@ -278,7 +279,12 @@ class DSPolicy:
         Returns:
             action: Raw control action [linear velocity (3), angular velocity (3)]
         """
-        if self.use_avg:
+        if self.none:
+            q_curr = R.from_quat(state[self.x_dim:])
+            _, _, omega = self.quat_model._step(q_curr, self.dt)            
+            return np.concatenate([np.zeros(self.x_dim), omega])
+        
+        elif self.avg:
             # Find all points from self.x whose distance is close to current state
             x_curr = state[:self.x_dim]
             close_points_velocities = []
@@ -495,7 +501,7 @@ class DSPolicy:
             f_x = action_from_model[: self.x_dim]
             if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 f_xref = 0
-            elif self.use_avg:
+            elif self.none or self.avg:
                 f_xref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
             else:
                 with torch.no_grad():
@@ -738,9 +744,10 @@ class DSPolicy:
         if 'pos_model' in model_config:
             pos_config = model_config['pos_model']
             # Check for use_avg mode
-            self.use_avg = pos_config.get('use_avg', False)
+            self.none = pos_config.get('special_mode', None) == 'none'
+            self.avg = pos_config.get('special_mode', None) == 'avg'
             
-            if not self.use_avg:
+            if not self.none and not self.avg:
                 if 'load_path' in pos_config:
                     self.pos_model = self._load_node(pos_config['load_path'], self.x_dim)
                 else:
@@ -793,8 +800,8 @@ class DSPolicy:
         Raises:
             ValueError: If models are not properly configured
         """
-        if self.use_avg:
-            # When using averaging, we still need quaternion model
+        if self.none or self.avg:
+            # When using none or averaging, we still need quaternion model
             if self.quat_model is None:
                 raise ValueError("Quaternion model is required when using velocity averaging mode")
             return

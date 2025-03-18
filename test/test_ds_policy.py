@@ -224,8 +224,8 @@ if __name__ == "__main__":
         # Define model configuration using the new structure
         model_config = {
             'pos_model': {
-                # Either use average velocities
-                # 'use_avg': True,
+                # Either use special mode
+                # 'special_mode': 'avg', # Can be "none", "avg"
                 # Or specify load_path to load an existing model
                 'load_path': f"models/mlp_width128_depth3_{option}.pt",
                 # Or provide training parameters if model doesn't exist yet
