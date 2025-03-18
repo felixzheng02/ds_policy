@@ -15,6 +15,10 @@ A dynamical system policy for robot control, providing stable and adaptive motio
 ### From Source
 
 ```bash
+# Create conda environment
+conda create -n <env_name> python=3.10.16
+conda activate <env_name>
+
 # Clone the repository
 git clone <repository_url>
 cd ds_policy
