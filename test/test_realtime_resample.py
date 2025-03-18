@@ -163,7 +163,7 @@ class TestRealtimeResampleAnimator(Animator):
 
 
 if __name__ == "__main__":
-    save_dir = "DSPolicy/data/test_realtime_resample"
+    save_dir = "ds_policy/data/test_realtime_resample"
     n_steps = [20, 20, 20]
     option = "move_towards"
     x, x_dot, quat, omega = load_data("custom", option)
@@ -172,10 +172,10 @@ if __name__ == "__main__":
         # Define model configuration using the new structure
         model_config = {
             'pos_model': {
-                'load_path': f"DSPolicy/models/mlp_width128_depth3_{option}.pt"
+                'load_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt"
             },
             'quat_model': {
-                'save_path': f"DSPolicy/models/quat_model_{option}.json",
+                'save_path': f"ds_policy/models/quat_model_{option}.json",
                 'k_init': 10
             }
         }

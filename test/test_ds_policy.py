@@ -233,29 +233,29 @@ if __name__ == "__main__":
                 # Either use average velocities
                 # 'use_avg': True,
                 # Or specify load_path to load an existing model
-                # 'load_path': f"DSPolicy/models/mlp_width128_depth3_{option}.pt",
+                'load_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt",
                 # Or provide training parameters if model doesn't exist yet
-                'width': 128,
-                'depth': 3,
-                'save_path': f"DSPolicy/models/mlp_width128_depth3_{option}.pt",
-                'batch_size': 100,
-                'device': "cpu",  # Can be "cpu", "cuda", or "mps"
-                'lr_strategy': (1e-3, 1e-4, 1e-5),
-                'epoch_strategy': (10, 10, 10),
-                'length_strategy': (0.4, 0.7, 1),
-                'plot': True,
-                'print_every': 10
+                # 'width': 128,
+                # 'depth': 3,
+                # 'save_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt",
+                # 'batch_size': 100,
+                # 'device': "cpu",  # Can be "cpu", "cuda", or "mps"
+                # 'lr_strategy': (1e-3, 1e-4, 1e-5),
+                # 'epoch_strategy': (10, 10, 10),
+                # 'length_strategy': (0.4, 0.7, 1),
+                # 'plot': True,
+                # 'print_every': 10
             },
             'quat_model': {
                 # Either use load_path
-                # 'load_path': f"DSPolicy/models/quat_model_{option}.json",
+                # 'load_path': f"ds_policy/models/quat_model_{option}.json",
                 # Or specify training parameters
-                'save_path': f"DSPolicy/models/quat_model_{option}.json",
+                'save_path': f"ds_policy/models/quat_model_{option}.json",
                 'k_init': 10
             }
             # Alternatively, you could use a unified model:
             # 'unified_model': {
-            #     'load_path': f"DSPolicy/models/mlp_width256_depth5_unified_{option}.pt",
+            #     'load_path': f"ds_policy/models/mlp_width256_depth5_unified_{option}.pt",
             #     'device': "cpu" 
             # }
         }
@@ -290,7 +290,7 @@ if __name__ == "__main__":
         simulator.simulate(
             np.concatenate([x[1][0], ds_utils.quat_to_euler(q[1][0])]),
             # init_state,
-            "DSPolicy/data/test_ds_policy.npz",
+            "ds_policy/data/test_ds_policy.npz",
             n_steps=100,
             clf=True,
             alpha_V=10,
@@ -298,7 +298,7 @@ if __name__ == "__main__":
         )
     
     # Load and visualize the results
-    data = np.load("DSPolicy/data/test_ds_policy.npz", allow_pickle=True)
+    data = np.load("ds_policy/data/test_ds_policy.npz", allow_pickle=True)
     demo_trajs = data["demo_trajs"]
     traj = data["traj"]
     ref_traj_indices = data["ref_traj_indices"]

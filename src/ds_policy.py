@@ -6,7 +6,7 @@ import time
 sys.path.append(
     os.path.join(
         os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "DSPolicy/src/",
+        "ds_policy/src/",
     )
 )
 from neural_ode import NeuralODE
