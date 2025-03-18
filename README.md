@@ -20,7 +20,7 @@ git clone <repository_url>
 cd ds_policy
 
 # Install the package
-pip install -e .
+pip install -e . --no-cache-dir
 ```
 
 ## Quick Start
