@@ -1,6 +1,4 @@
-import os
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.spatial.transform import Slerp
 from scipy.spatial.transform import Rotation as R
 from scipy.signal import savgol_filter

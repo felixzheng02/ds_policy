@@ -1,11 +1,9 @@
-import sys
 import os
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from ds_policy.ds_policy import DSPolicy
-from ds_policy.load_tools import load_data
-from ds_policy.ds_utils import quat_to_euler
+from ds_policy import DSPolicy
+from ds_policy import load_data
 from test_ds_policy import Simulator, Animator
 
 
@@ -161,7 +159,7 @@ class TestRealtimeResampleAnimator(Animator):
 
 
 if __name__ == "__main__":
-    save_dir = "ds_policy/data/test_realtime_resample"
+    save_dir = "data/test_realtime_resample"
     n_steps = [20, 20, 20]
     option = "move_towards"
     x, x_dot, quat, omega = load_data("custom", option)
@@ -170,10 +168,10 @@ if __name__ == "__main__":
         # Define model configuration using the new structure
         model_config = {
             'pos_model': {
-                'load_path': f"ds_policy/models/mlp_width128_depth3_{option}.pt"
+                'load_path': f"models/mlp_width128_depth3_{option}.pt"
             },
             'quat_model': {
-                'save_path': f"ds_policy/models/quat_model_{option}.json",
+                'save_path': f"models/quat_model_{option}.json",
                 'k_init': 10
             }
         }

@@ -2,7 +2,6 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
-from matplotlib.ticker import FormatStrFormatter
 from scipy.spatial.transform import Rotation as R
 from .quat_tools import *
 import random
