@@ -2,7 +2,7 @@
 DS Policy - A dynamical system policy for robot control
 """
 
-from .ds_policy import DSPolicy
+from .policy import DSPolicy
 from .neural_ode.neural_ode import NeuralODE
 from .load_tools import load_data
 
