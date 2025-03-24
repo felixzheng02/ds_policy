@@ -4,9 +4,8 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from scipy.spatial.transform import Rotation as R
 
-from ds_policy import DSPolicy
-from ds_policy import ds_utils
-from ds_policy import load_data
+from ds_policy.policy import DSPolicy
+from ds_policy.ds_utils import load_data, euler_to_quat, quat_to_euler
 
 
 class Simulator:
@@ -27,7 +26,7 @@ class Simulator:
         state = init_state
         for i in range(n_steps):
             self.traj.append(state.copy())
-            quat = ds_utils.euler_to_quat(state[3:])
+            quat = euler_to_quat(state[3:])
             action = self.ds_policy.get_action(
                 np.concatenate([state[:3], quat]),
                 clf=clf,
@@ -153,7 +152,7 @@ class Animator:
 
         # Convert Euler angles to direction vector
         euler_angles = self.traj[frame, 3:]
-        quat = ds_utils.euler_to_quat(euler_angles)
+        quat = euler_to_quat(euler_angles)
 
         # Create direction vector from quaternion
         w, x, y, z = quat
@@ -216,7 +215,7 @@ if __name__ == "__main__":
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
         option = "move_towards"
-        x, x_dot, q, omega = load_data("custom", option)
+        x, x_dot, q, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
         demo_traj_probs[1] = 0
@@ -282,7 +281,7 @@ if __name__ == "__main__":
         )
         
         simulator.simulate(
-            np.concatenate([x[1][0], ds_utils.quat_to_euler(q[1][0])]),
+            np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
             # init_state,
             "ds_policy/data/test_ds_policy.npz",
             n_steps=100,

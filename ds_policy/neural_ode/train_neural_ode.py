@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from torch.utils.data import TensorDataset, DataLoader
 
 # Import from parent directory
-from .. import load_tools
+from ..ds_utils import load_data
 from .neural_ode import NeuralODE
 
 
@@ -458,7 +458,7 @@ def label_pred_comparison(
 if __name__ == "__main__":
     width_size = 256
     depth = 5
-    x, x_dot, quat, omega = load_tools.load_data("custom")
+    x, x_dot, quat, omega = load_data("custom")
 
     x_pos = x
     x_dot_pos = x_dot

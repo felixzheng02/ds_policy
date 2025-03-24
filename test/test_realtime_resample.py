@@ -162,7 +162,7 @@ if __name__ == "__main__":
     save_dir = "data/test_realtime_resample"
     n_steps = [20, 20, 20]
     option = "move_towards"
-    x, x_dot, quat, omega = load_data("custom", option)
+    x, x_dot, quat, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
     
     if True:  # Set to False to skip simulation and only animate existing results
         # Define model configuration using the new structure

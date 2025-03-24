@@ -54,6 +54,10 @@ dependencies = [
     "typing_extensions==4.12.2"
 ]
 
+# Explicitly specify which packages to include
+[tool.setuptools]
+packages = ["ds_policy"]
+
 # Uncomment and add URLs when available
 # [project.urls]
 # "Homepage" = "https://github.com/username/ds_policy"

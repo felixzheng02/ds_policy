@@ -6,7 +6,6 @@ import torch
 from jaxopt import OSQP
 import jax
 import jax.numpy as jnp
-from scipy import sparse
 import json
 from scipy.spatial.transform import Rotation as R
 
