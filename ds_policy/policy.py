@@ -80,6 +80,7 @@ class DSPolicy:
                     - load_path (str, optional): Path to load pre-trained model
                     - [training parameters if not loading]
                 - quat_model (dict, optional): Configuration for orientation-only model
+                    - special_mode (str, optional): "none"
                     - load_path (str, optional): Path to load pre-trained model
                     - [training parameters if not loading]
             dt: Time step for simulation and prediction
@@ -121,8 +122,9 @@ class DSPolicy:
             [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         )
 
-        self.none = False
-        self.avg = False
+        self.pos_none = False
+        self.pos_avg = False
+        self.quat_none = False
         self._configure_models(model_config)
         self._validate_model_setup()
 
@@ -161,26 +163,34 @@ class DSPolicy:
         return action
     
     def update_demo_traj_probs(
-        self, x_state: np.ndarray, radius: float, penalty: float, lookahead: int = None
+        self, state: np.ndarray, radius: float, angle_threshold: float, penalty: float, lookahead: int = None
     ):
         """
         Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
         
         Args:
-            x_state: Current position state (x, y, z)
+            state: Current state (x, y, z, qw, qx, qy, qz)
             radius: Threshold distance to consider a trajectory point as "close"
+            angle_threshold: Threshold angle to consider a trajectory point as "close"
             penalty: Factor to reduce probability for trajectories with close points
             lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
         """
         if lookahead is not None:
             self.lookahead = lookahead
-
-        for i, traj in enumerate(self.x):
-            distances = np.sqrt(np.sum((traj - x_state) ** 2, axis=1))
-            if np.any(distances < radius):
+        for i in range(len(self.x)):
+            distances = np.sqrt(np.sum((self.x[i] - state[:3]) ** 2, axis=1))
+            angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * state[3:], axis=1)))
+            mask = np.logical_and(distances < radius, angles < angle_threshold)
+            if np.any(mask):
                 self.demo_traj_probs[i] *= penalty
+        
+        # Normalize the probabilities to keep the highest probability at 1
+        if len(self.demo_traj_probs) > 0:
+            max_prob = np.max(self.demo_traj_probs)
+            if max_prob > 0:  # Avoid division by zero
+                self.demo_traj_probs = self.demo_traj_probs / max_prob
 
-        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(x_state, True)
+        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(state[:3], True)
 
     def _load_node(self, model_path: str, input_dim: int, output_dim: int) -> NeuralODE:
         """
@@ -276,12 +286,14 @@ class DSPolicy:
         Returns:
             action: Raw control action [linear velocity (3), angular velocity (3)]
         """
-        if self.none:
+        if self.pos_none:
+            if self.quat_none:
+                return np.zeros(6)
             q_curr = R.from_quat(state[3:])
             _, _, omega = self.quat_model._step(q_curr, self.dt)            
             return np.concatenate([np.zeros(3), omega])
         
-        elif self.avg:
+        elif self.pos_avg:
             # Find all points from self.x whose distance is close to current state
             x_curr = state[:3]
             close_points_velocities = []
@@ -309,6 +321,8 @@ class DSPolicy:
                 x_dot = np.mean(np.array(close_points_velocities), axis=0)
             
             # Get orientation part
+            if self.quat_none:
+                return np.concatenate([x_dot, np.zeros(3)])
             q_curr = R.from_quat(state[3:])
             _, _, omega = self.quat_model._step(q_curr, self.dt)            
 
@@ -318,12 +332,13 @@ class DSPolicy:
             with torch.no_grad():
                 x_dot = self.pos_model.forward(state[: 3]).numpy()
 
+            if self.quat_none:
+                return np.concatenate([x_dot, np.zeros(3)])
             q_curr = R.from_quat(state[3 :])
-
             _, _, omega = self.quat_model._step(q_curr, self.dt)
 
             return np.concatenate([x_dot, omega])
-        else:
+        else:  # unified model
             with torch.no_grad():
                 return self.model.forward(state).numpy()
 
@@ -493,12 +508,12 @@ class DSPolicy:
 
         if (
             self.model is None
-        ):  # using so3-lpvds for orientation control, only need to apply clf to position
+        ):  # only need to apply clf to position
             current_x = current_state[: 3]
             f_x = action_from_model[: 3]
             if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 f_xref = 0
-            elif self.none or self.avg:
+            elif self.pos_none or self.pos_avg:
                 f_xref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
             else:
                 with torch.no_grad():
@@ -638,8 +653,11 @@ class DSPolicy:
         """
         Choose reference trajectory and point based on current position.
         
-        Selects the most appropriate demonstration trajectory and point within it
-        to serve as a reference for the control system.
+        Criteria:
+            - for each demo trajectory i, compute smallest distance to x_state among all its points: closest_distances[i], corresponding point index: closest_indices[i]
+            - score[i] = log(p[i]) - closest_distances[i] NOTE: this could be modified
+            - prob_dist = softmax(score)
+            - traj_idx = argmax(prob_dist), point_idx = closest_indices[traj_idx]
         
         Args:
             x_state: Current position state (x, y, z)
@@ -741,10 +759,10 @@ class DSPolicy:
         if 'pos_model' in model_config:
             pos_config = model_config['pos_model']
             # Check for use_avg mode
-            self.none = pos_config.get('special_mode', None) == 'none'
-            self.avg = pos_config.get('special_mode', None) == 'avg'
+            self.pos_none = pos_config.get('special_mode', None) == 'none'
+            self.pos_avg = pos_config.get('special_mode', None) == 'avg'
             
-            if not self.none and not self.avg:
+            if not self.pos_none and not self.pos_avg:
                 if 'load_path' in pos_config:
                     self.pos_model = self._load_node(pos_config['load_path'], 3, 3)
                 else:
@@ -776,6 +794,10 @@ class DSPolicy:
         # Configure quaternion model if specified
         if 'quat_model' in model_config:
             quat_config = model_config['quat_model']
+
+            self.quat_none = quat_config.get('special_mode', None) == 'none'
+            if self.quat_none:
+                return
             
             # Check if loading pre-trained model
             if 'load_path' in quat_config:
@@ -797,21 +819,12 @@ class DSPolicy:
         Raises:
             ValueError: If models are not properly configured
         """
-        if self.none or self.avg:
-            # When using none or averaging, we still need quaternion model
-            if self.quat_model is None:
-                raise ValueError("Quaternion model is required when using velocity averaging mode")
-            return
-        
         if self.model is not None:
             # Unified model is configured, no need for separate models
             return
         
-        if self.pos_model is None or self.quat_model is None:
-            # Both position and quaternion models are required when not using unified model
-            missing = []
-            if self.pos_model is None:
-                missing.append("position")
-            if self.quat_model is None:
-                missing.append("quaternion")
-            raise ValueError(f"Missing required models: {', '.join(missing)}. Either configure a unified model or both position and quaternion models.")
+        if not self.pos_none and not self.pos_avg and self.pos_model is None:
+            raise ValueError("Either set special_mode to 'none' or 'avg' or configure a position model")
+        
+        if not self.quat_none and self.quat_model is None:
+            raise ValueError("Either set special_mode to 'none' or configure a quaternion model")

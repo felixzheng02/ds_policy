@@ -224,9 +224,9 @@ if __name__ == "__main__":
         model_config = {
             'pos_model': {
                 # Either use special mode
-                # 'special_mode': 'avg', # Can be "none", "avg"
+                'special_mode': 'none', # Can be "none", "avg"
                 # Or specify load_path to load an existing model
-                'load_path': f"models/mlp_width128_depth3_{option}.pt",
+                # 'load_path': f"models/mlp_width128_depth3_{option}.pt",
                 # Or provide training parameters if model doesn't exist yet
                 # 'width': 128,
                 # 'depth': 3,
@@ -240,11 +240,13 @@ if __name__ == "__main__":
                 # 'print_every': 10
             },
             'quat_model': {
-                # Either use load_path
+                # Either use special mode
+                'special_mode': 'none',
+                # Or specify load_path to load an existing model
                 # 'load_path': f"models/quat_model_{option}.json",
                 # Or specify training parameters
-                'save_path': f"models/quat_model_{option}.json",
-                'k_init': 10
+                # 'save_path': f"models/quat_model_{option}.json",
+                # 'k_init': 10
             }
             # Alternatively, you could use a unified model:
             # 'unified_model': {
