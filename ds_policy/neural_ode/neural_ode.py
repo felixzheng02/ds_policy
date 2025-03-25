@@ -16,28 +16,22 @@ class NeuralODE(nn.Module):
     - Output: 7D vector field [translational velocity (3D), rotational velocity (4D)]
     """
 
-    def __init__(self, data_size: int, width_size: int, depth: int, **kwargs):
+    def __init__(self, input_size: int, output_size: int, width_size: int, depth: int, **kwargs):
         """Initialize the model.
 
         Args:
-            data_size: Dimension of input state (3 for position)
+            input_size: Dimension of input state
+            output_size: Dimension of output state
             width_size: Width of hidden layers
             depth: Number of hidden layers
         """
         super(NeuralODE, self).__init__()
 
-        if data_size == 3:  # only position
-            output_size = 3
-        elif data_size == 7:  # position and quaternion
-            output_size = 6  # x_dot, omega
-        else:
-            raise ValueError(f"Invalid data size: {data_size}")
-
         # Create a list to hold all layers
         layers = []
 
         # Input layer
-        layers.append(nn.Linear(data_size, width_size))
+        layers.append(nn.Linear(input_size, width_size))
         layers.append(nn.Tanh())
 
         # Hidden layers
@@ -77,9 +71,9 @@ class NeuralODEWrapper(nn.Module):
     TODO: not used
     """
 
-    def __init__(self, data_size, width_size, depth, **kwargs):
+    def __init__(self, input_size, output_size, width_size, depth, **kwargs):
         super(NeuralODEWrapper, self).__init__()
-        self.neural_ode = NeuralODE(data_size, width_size, depth)
+        self.neural_ode = NeuralODE(input_size, output_size, width_size, depth)
 
     def predict_velocity(self, x: np.ndarray):
         """Predict velocity directly from position without ODE integration."""
