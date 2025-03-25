@@ -89,8 +89,14 @@ class DSPolicy:
             backtrack_steps: Number of steps to backtrack on collision
             **kwargs: Additional keyword arguments
         """
-        self.x_dim = 3
-        self.r_dim = 4
+        if x[0].shape[-1] == 3: # transformed to goal frame
+            self.node_input_size = 3
+            self.node_output_size = 3
+        elif x[0].shape[-1] == 6: # raw data from world_frame
+            self.node_input_size = 6
+            self.node_output_size = 3
+        else:
+            raise ValueError(f"Unexpected input size: {x[0].shape[-1]}")
         self.dt = dt
         self.x = x
         self.x_dot = x_dot
@@ -184,14 +190,12 @@ class DSPolicy:
 
         self.ref_traj_idx, self.ref_point_idx = self._choose_ref(x_state, True)
 
-    def _load_node(self, model_path: str, input_dim: int) -> NeuralODE:
+    def _load_node(self, model_path: str) -> NeuralODE:
         """
         Load a pre-trained Neural ODE model from disk.
         
         Args:
             model_path: Path to the saved model file
-            input_dim: Dimension of the input to the model
-            
         Returns:
             loaded_model: Loaded Neural ODE model
         """
@@ -201,7 +205,7 @@ class DSPolicy:
         width_size = int(width_str)
         depth = int(depth_str)
         
-        model = NeuralODE(input_dim, width_size, depth)
+        model = NeuralODE(self.node_input_size, self.node_output_size, width_size, depth)
         model.load_state_dict(torch.load(model_path, weights_only=True))
         model.to('cpu')
         model.eval()
@@ -279,13 +283,13 @@ class DSPolicy:
             action: Raw control action [linear velocity (3), angular velocity (3)]
         """
         if self.none:
-            q_curr = R.from_quat(state[self.x_dim:])
+            q_curr = R.from_quat(state[3:])
             _, _, omega = self.quat_model._step(q_curr, self.dt)            
-            return np.concatenate([np.zeros(self.x_dim), omega])
+            return np.concatenate([np.zeros(3), omega])
         
         elif self.avg:
             # Find all points from self.x whose distance is close to current state
-            x_curr = state[:self.x_dim]
+            x_curr = state[:3]
             close_points_velocities = []
             
             # Define a distance threshold for "close" points
@@ -305,22 +309,22 @@ class DSPolicy:
             
             # If no close points found, use the model directly
             if len(close_points_velocities) == 0:
-                x_dot = np.zeros(self.x_dim)
+                x_dot = np.zeros(3)
             else:
                 # Average the velocities of close points
                 x_dot = np.mean(np.array(close_points_velocities), axis=0)
             
             # Get orientation part
-            q_curr = R.from_quat(state[self.x_dim:])
+            q_curr = R.from_quat(state[3:])
             _, _, omega = self.quat_model._step(q_curr, self.dt)            
 
             return np.concatenate([x_dot, omega])
 
         elif self.model is None:  # pos_model and quat_model are separate
             with torch.no_grad():
-                x_dot = self.pos_model.forward(state[: self.x_dim]).numpy()
+                x_dot = self.pos_model.forward(state[:3]).numpy()
 
-            q_curr = R.from_quat(state[self.x_dim :])
+            q_curr = R.from_quat(state[3:])
 
             _, _, omega = self.quat_model._step(q_curr, self.dt)
 
@@ -487,7 +491,7 @@ class DSPolicy:
             action: Modified action that satisfies CLF constraints
         """
         self.ref_traj_idx, self.ref_point_idx = self._choose_ref(
-            current_state[: self.x_dim], self.switch
+            current_state[:3], self.switch
         )
         ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
         ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
@@ -496,8 +500,8 @@ class DSPolicy:
         if (
             self.model is None
         ):  # using so3-lpvds for orientation control, only need to apply clf to position
-            current_x = current_state[: self.x_dim]
-            f_x = action_from_model[: self.x_dim]
+            current_x = current_state[:3]
+            f_x = action_from_model[:3]
             if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 f_xref = 0
             elif self.none or self.avg:
@@ -701,7 +705,7 @@ class DSPolicy:
             
             # Check if loading pre-trained model
             if 'load_path' in unified_config:
-                self.model = self._load_node(unified_config['load_path'], self.x_dim + self.r_dim)
+                self.model = self._load_node(unified_config['load_path'])
             else:
                 # Training configuration
                 width = unified_config.get('width', 128)
@@ -748,7 +752,7 @@ class DSPolicy:
             
             if not self.none and not self.avg:
                 if 'load_path' in pos_config:
-                    self.pos_model = self._load_node(pos_config['load_path'], self.x_dim)
+                    self.pos_model = self._load_node(pos_config['load_path'])
                 else:
                     # Training configuration
                     width = pos_config.get('width', 128)
