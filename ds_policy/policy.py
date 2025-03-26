@@ -163,26 +163,67 @@ class DSPolicy:
         return action
     
     def update_demo_traj_probs(
-        self, state: np.ndarray, radius: float, angle_threshold: float, penalty: float, lookahead: int = None
+        self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = None, radius: float = None, angle_threshold: float = None, lookahead: int = None
     ):
         """
         Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
         
         Args:
             state: Current state (x, y, z, qw, qx, qy, qz)
+            mode: "trajectory" or "point"
+            penalty: Factor to reduce probability for trajectories with close points
+            traj_threshold: Threshold distance to consider a trajectory as "close"
             radius: Threshold distance to consider a trajectory point as "close"
             angle_threshold: Threshold angle to consider a trajectory point as "close"
-            penalty: Factor to reduce probability for trajectories with close points
             lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
         """
         if lookahead is not None:
             self.lookahead = lookahead
-        for i in range(len(self.x)):
-            distances = np.sqrt(np.sum((self.x[i] - state[:3]) ** 2, axis=1))
-            angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * state[3:], axis=1)))
-            mask = np.logical_and(distances < radius, angles < angle_threshold)
-            if np.any(mask):
-                self.demo_traj_probs[i] *= penalty
+        if mode == "point":
+            for i in range(len(self.x)):
+                distances = np.sqrt(np.sum((self.x[i] - state[:3]) ** 2, axis=1))
+                angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * state[3:], axis=1)))
+                mask = np.logical_and(distances < radius, angles < angle_threshold)
+                if np.any(mask):
+                    self.demo_traj_probs[i] *= penalty
+        elif mode == "trajectory":
+            # Get the currently followed trajectory
+            current_traj_idx = self.ref_traj_idx
+            if current_traj_idx is None:
+                return
+            
+            current_traj = self.x[current_traj_idx]
+            
+            # Compute Hausdorff distances between current trajectory and all other trajectories
+            for i in range(len(self.x)):
+                if i == current_traj_idx:
+                    continue  # Skip the current trajectory
+                
+                # Compute the pairwise distances between points in current_traj and other trajectory
+                # For each point in current_traj, find its distance to each point in other trajectory
+                # Shape: (len(current_traj), len(other_traj))
+                other_traj = self.x[i]
+                
+                # Reshape for broadcasting: (n_points_A, 1, 3) - (1, n_points_B, 3)
+                pairwise_distances = np.sqrt(np.sum(
+                    (current_traj[:, np.newaxis, :] - other_traj[np.newaxis, :, :]) ** 2, 
+                    axis=2
+                ))
+                
+                # Directed Hausdorff h(A,B): max_{a in A} min_{b in B} d(a,b)
+                h_AB = np.max(np.min(pairwise_distances, axis=1))
+                
+                # Directed Hausdorff h(B,A): max_{b in B} min_{a in A} d(b,a)
+                h_BA = np.max(np.min(pairwise_distances, axis=0))
+                
+                # Hausdorff distance is the maximum of h(A,B) and h(B,A)
+                hausdorff_dist = max(h_AB, h_BA)
+                
+                # If the Hausdorff distance is below the threshold, reduce the probability
+                if hausdorff_dist < traj_threshold:  # radius parameter is used as threshold
+                    self.demo_traj_probs[i] *= penalty
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
         
         # Normalize the probabilities to keep the highest probability at 1
         if len(self.demo_traj_probs) > 0:
