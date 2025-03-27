@@ -35,6 +35,7 @@ class DSPolicy:
         __init__: Initialize the DS policy with demonstration data and model configuration
         get_action: Generate control action for a given state
         update_demo_traj_probs: Update trajectory probabilities based on collision detection
+        reset: Reset the trajectory probabilities to the initial values
     Private methods (should not be called externally):
         _load_node: Load a pre-trained Neural ODE model from disk
         _train_node: Train a Neural ODE model on demonstration data
@@ -225,6 +226,9 @@ class DSPolicy:
         else:
             raise ValueError(f"Invalid mode: {mode}")
         
+        # NOTE: this always penalizes the currently followed trajectory, forces it to at least switch to some other close trajectory
+        self.demo_traj_probs[self.ref_traj_idx] *= penalty
+        
         # Normalize the probabilities to keep the highest probability at 1
         if len(self.demo_traj_probs) > 0:
             max_prob = np.max(self.demo_traj_probs)
@@ -232,6 +236,11 @@ class DSPolicy:
                 self.demo_traj_probs = self.demo_traj_probs / max_prob
 
         self.ref_traj_idx, self.ref_point_idx = self._choose_ref(state[:3], True)
+
+    def reset(self):
+        self.demo_traj_probs = np.ones(len(self.x))
+        self.ref_traj_idx = None
+        self.ref_point_idx = None
 
     def _load_node(self, model_path: str, input_dim: int, output_dim: int) -> NeuralODE:
         """
@@ -721,11 +730,19 @@ class DSPolicy:
                 closest_indices.append(closest_idx)
                 closest_distances.append(min_distance)
 
-            scores = 10 * np.log(self.demo_traj_probs) - np.array(closest_distances)
+            scores = np.log(self.demo_traj_probs) - np.array(closest_distances)
             prob_dist = np.exp(scores) / np.sum(np.exp(scores))
 
             # Select the trajectory with the highest probability
-            traj_idx = np.argmax(prob_dist)
+            # If multiple trajectories have the same maximum probability, choose one randomly
+            max_prob = np.max(prob_dist)
+            max_indices = np.where(prob_dist == max_prob)[0]
+            if len(max_indices) > 1:
+                # Multiple trajectories have the same maximum probability, choose randomly
+                traj_idx = np.random.choice(max_indices)
+            else:
+                traj_idx = max_indices[0]
+            
             # Get the corresponding closest point index for the selected trajectory
             point_idx = closest_indices[traj_idx]
         else:  # stick to the current trajectory
