@@ -5,6 +5,7 @@ from scipy.spatial.transform import Rotation as R
 from ds_policy import DSPolicy
 from ds_policy import load_data
 from test_ds_policy import Simulator, Animator
+from ds_policy.ds_utils import euler_to_quat, quat_to_euler
 
 
 class TestRealtimeResample:
@@ -47,7 +48,7 @@ class TestRealtimeResample:
         for i in range(k):
             cur_save_path = os.path.join(save_dir, f"simulator_{i}.npz")
             traj, _, _ = simulators[i].simulate(
-                cur_state, cur_save_path, n_steps[i], clf=True, alpha_V=30, lookahead=5
+                cur_state, cur_save_path, n_steps[i], clf=True, alpha_V=30, lookahead=30
             )
             cur_state = traj[-1]
             if i < k - 1:
@@ -70,8 +71,9 @@ class TestRealtimeResample:
         Args:
             cur_state: Current state (position + euler angles)
         """
+        quat_state = euler_to_quat(cur_state[3:])
         self.ds_policy.update_demo_traj_probs(
-            x_state=cur_state[:3], radius=0.05, penalty=0.1
+            state=np.concatenate([cur_state[:3], quat_state]), mode="point", penalty=0.1, traj_threshold=0.1, radius=0.1, angle_threshold=np.pi/2, lookahead=30
         )
         self.demo_traj_probs_history.append(self.ds_policy.demo_traj_probs)
 
@@ -160,19 +162,21 @@ class TestRealtimeResampleAnimator(Animator):
 
 if __name__ == "__main__":
     save_dir = "data/test_realtime_resample"
-    n_steps = [20, 20, 20]
-    option = "move_towards"
+    n_steps = [10, 10]
+    option = "move_away"
     x, x_dot, quat, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
     
     if True:  # Set to False to skip simulation and only animate existing results
         # Define model configuration using the new structure
         model_config = {
             'pos_model': {
-                'load_path': f"models/mlp_width128_depth3_{option}.pt"
+                'special_mode': 'none',
+                # 'load_path': f"models/mlp_width128_depth3_{option}.pt"
             },
             'quat_model': {
-                'save_path': f"models/quat_model_{option}.json",
-                'k_init': 10
+                'special_mode': 'none',
+                # 'save_path': f"models/quat_model_{option}.json",
+                # 'k_init': 10
             }
         }
         
@@ -185,7 +189,7 @@ if __name__ == "__main__":
             model_config=model_config,
             dt=0.01, 
             switch=False, 
-            lookahead=5
+            lookahead=30
         )
 
         # Set up random initial state
@@ -202,8 +206,8 @@ if __name__ == "__main__":
         # Run the resampling test
         test_realtime_resample = TestRealtimeResample(ds_policy)
         demo_traj_probs_history = test_realtime_resample.test(
-            # init_state=np.concatenate([x[0][0], quat_to_euler(quat[0][0])]),
-            init_state=init_state,
+            init_state=np.concatenate([x[27][0], quat_to_euler(quat[27][0])]),
+            # init_state=init_state,
             save_dir=save_dir,
             n_steps=n_steps,
         )

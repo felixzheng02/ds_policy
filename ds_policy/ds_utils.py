@@ -8,11 +8,12 @@ import math
 
 
 def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: bool = False):
-    
     if option == "move_towards":
         seg_num_int = 0
     elif option == "move_away":
         seg_num_int = 1
+    elif option == "reach_behind_and_pull":
+        seg_num_int = 2
     else:
         raise ValueError(f"Invalid option: {option}")
     input_path = os.path.join(
@@ -36,6 +37,10 @@ def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: boo
 
     for l in range(L):
         demo_num = str(l).zfill(2)
+
+        # Check if eef_traj file exists, if not, continue to next iteration
+        if not os.path.exists(os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")):
+            continue
         
         eef_traj = np.load(
             os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")

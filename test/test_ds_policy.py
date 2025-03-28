@@ -214,7 +214,7 @@ if __name__ == "__main__":
     if (
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
-        option = "move_towards"
+        option = "reach_behind_and_pull"
         x, x_dot, q, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
