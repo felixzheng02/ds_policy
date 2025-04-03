@@ -3,10 +3,28 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from scipy.spatial.transform import Rotation as R
-
+from scipy.linalg import expm
 from ds_policy.policy import DSPolicy
 from ds_policy.ds_utils import load_data, euler_to_quat, quat_to_euler
 
+
+def update_state(cur_state, vel, dt):
+    pos_vel = vel[:3]
+    ang_vel = vel[3:]
+
+    new_pos = cur_state[:3] + pos_vel * dt
+
+    R_cur = R.from_euler('xyz', cur_state[3:]).as_matrix()
+    omega_hat = np.array([
+        [0, -ang_vel[2], ang_vel[1]],
+        [ang_vel[2], 0, -ang_vel[0]],
+        [-ang_vel[1], ang_vel[0], 0]
+    ])
+    delta_R = expm(omega_hat * dt)
+    R_new = R_cur @ delta_R
+    new_euler = R.from_matrix(R_new).as_euler('xyz')
+    
+    return np.concatenate([new_pos, new_euler])
 
 class Simulator:
     def __init__(self, ds_policy):
@@ -35,7 +53,7 @@ class Simulator:
             )
             if clf:
                 self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
-            state += action * 0.02
+            state = update_state(state, action, 1/60)
 
         demo_trajs = [
             np.concatenate([self.ds_policy.x[i], self.ds_policy.quat[i]], axis=-1)
@@ -153,6 +171,7 @@ class Animator:
         # Convert Euler angles to direction vector
         euler_angles = self.traj[frame, 3:]
         quat = euler_to_quat(euler_angles)
+        quat = demo_trajs[0][frame, 3:] # NOTE: visualize demo trajectory's orientation
 
         # Create direction vector from quaternion
         w, x, y, z = quat
@@ -214,11 +233,10 @@ if __name__ == "__main__":
     if (
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
-        option = "reach_behind_and_pull"
+        option = "move_towards"
         x, x_dot, q, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
-        demo_traj_probs[1] = 0
 
         # Define model configuration using the new structure
         model_config = {
@@ -263,7 +281,7 @@ if __name__ == "__main__":
             omega=omega, 
             model_config=model_config,
             dt=1/60, 
-            switch=True, 
+            switch=False, 
             demo_traj_probs=demo_traj_probs
         )
 
@@ -283,13 +301,13 @@ if __name__ == "__main__":
         )
         
         simulator.simulate(
-            np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
+            np.concatenate([x[4][0], quat_to_euler(q[4][0])]),
             # init_state,
             "ds_policy/data/test_ds_policy.npz",
             n_steps=100,
             clf=True,
-            alpha_V=10,
-            lookahead=10,
+            alpha_V=1,
+            lookahead=20,
         )
     
     # Load and visualize the results

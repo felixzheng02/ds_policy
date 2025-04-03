@@ -10,7 +10,7 @@ import json
 from scipy.spatial.transform import Rotation as R
 
 from .neural_ode.train_neural_ode import train
-from .ds_utils import quat_mult, Quaternion
+from .ds_utils import quat_mult, Quaternion, quat_to_euler, euler_to_quat
 from .so3_lpvds.gmm_class import gmm_class
 from .so3_lpvds.quat_class import quat_class
 from .so3_lpvds.process_tools import (
@@ -26,7 +26,7 @@ qp = OSQP()
 
 @jax.jit
 def qp_solve(Q_opt, G_opt, h_opt):
-    return qp.run(params_obj=(Q_opt, jnp.zeros(3)), params_ineq=(G_opt, h_opt)).params
+    return qp.run(params_obj=(Q_opt, jnp.zeros(Q_opt.shape[0])), params_ineq=(G_opt, h_opt)).params
 
 
 class DSPolicy:
@@ -532,7 +532,7 @@ class DSPolicy:
     def _apply_clf(
         self,
         current_state: np.ndarray,
-        action_from_model: np.ndarray,
+        action_raw: np.ndarray,
         alpha_V: float,
     ) -> np.ndarray:
         """
@@ -557,10 +557,10 @@ class DSPolicy:
         ref_state = np.concatenate([ref_x, ref_quat])
 
         if (
-            self.model is None
-        ):  # only need to apply clf to position
+            self.quat_model is not None
+        ):  # quat_model already applied clf, only need to apply clf to position
             current_x = current_state[: 3]
-            f_x = action_from_model[: 3]
+            f_x = action_raw[: 3]
             if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 f_xref = 0
             elif self.pos_none or self.pos_avg:
@@ -584,120 +584,161 @@ class DSPolicy:
 
             u_star = qp_solve(Q_opt, G_opt, h_opt).primal.reshape(-1)
 
-            action = action_from_model
+            action = action_raw
             action[:3] = f_x[:3] + u_star
 
             return action
 
-        else:  # unified model NOTE: not good
-            quat = jnp.array(current_state[3:]).reshape((-1, 1))
-            # Scaling factors for position and quaternion errors in the cost function
-            scale_q = 1
-            scale_p = 1
+        else:  # apply clf to both
+            # Get reference dynamics
+            if self.model is not None:
+                with torch.no_grad():
+                    vel_ref = jnp.array(self.model.forward(ref_state))
+                    vel_pos_ref = vel_ref[:3]
+                    vel_ang_ref = vel_ref[3:]
+            else:
+                if self.pos_none or self.pos_avg:
+                    vel_pos_ref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
+                else:
+                    with torch.no_grad():
+                        vel_pos_ref = jnp.array(self.pos_model.forward(ref_x))
+                if self.quat_none:
+                    vel_ang_ref = jnp.zeros(3)
+                else:
+                    with torch.no_grad():
+                        vel_ang_ref = jnp.array(self.quat_model._step(ref_quat, self.dt)[2])
+                action_ref_pos = vel_pos_ref.reshape((-1,1))
+                action_ref_euler = vel_ang_ref.reshape((-1,1))
+                action_ref_quat = jnp.vstack((0.0, action_ref_euler))
+                action_ref = jnp.vstack((action_ref_pos, action_ref_quat))
 
-            # Construct the cost matrix for the QP
-            Q_opt = jnp.vstack(
-                (
-                    jnp.hstack((scale_p * jnp.eye(3), jnp.zeros((3, 3)))),
-                    jnp.hstack((jnp.zeros((3, 3)), scale_q * jnp.eye(3))),
-                )
-            )
+                cur_state = jnp.array(current_state).reshape((-1,1))
+                cur_quat = cur_state[3:]
 
-            # Compute error between current and reference state
-            err = jnp.array(current_state) - jnp.array(ref_state)
-            # Normalize quaternion error
-            err = err.at[3:].set(err[3:] / jnp.linalg.norm(err[3:]))
-            err_pos = err[:3]  # Position error
-            err_quat = err[3:]  # Quaternion error
+                # Get the reference state at the chosen index
+                ref_state = jnp.array(ref_state).reshape((-1,1)) # dim x 1
 
-            # Lyapunov function (quadratic in the error)
-            V = jnp.sum(jnp.square(2 * err)) / 4
-            # Get nominal dynamics from the learned model
-            vel = jnp.array(action_from_model).reshape((-1, 1))
+                # Extract reference quaternion
+                ref_quat = ref_state[3:]
 
-            vel_pos = vel[:3]  # Position dynamics
+                # Scaling factors for position and quaternion errors in the cost function
+                scale_q = 1
+                scale_p = 1
 
-            # Angular velocity from the model
-            vel_ang = vel[3:].reshape((-1, 1))
-            vel_ang_quat = jnp.vstack(
-                (0.0, vel_ang)
-            )  # Prepend 0 for quaternion multiplication
+                # Construct the cost matrix for the QP
+                Q_opt = jnp.vstack((jnp.hstack((scale_p*jnp.eye(3), jnp.zeros((3,3)))), jnp.hstack((jnp.zeros((3,3)), scale_q*jnp.eye(3)))))
+                
+                # Compute error between current and reference state
+                err = cur_state - ref_state
+                # Normalize quaternion error
+                err = err.at[3:].set(err[3:]/jnp.linalg.norm(err[3:]))
+                err_pos = err[:3]  # Position error
+                err_quat = err[3:]  # Quaternion error
+                
+                # Lyapunov function (quadratic in the error)
+                V = jnp.sum(jnp.square(2*err))/4
 
-            # Get reference dynamics TODO
-            with torch.no_grad():
-                vel_ref = jnp.array(self.model.forward(ref_state)).reshape((-1, 1))
-            vel_pos_ref = vel_ref[:3].reshape((-1, 1))
-            vel_ang_ref = vel_ref[3:].reshape((-1, 1))
-            # vel_pos_ref = jnp.array(
-            #     self.x_dot[self.ref_traj_idx][self.ref_point_idx]
-            # ).reshape((-1, 1))
-            # vel_ang_ref = jnp.array(
-            #     self.omega[self.ref_traj_idx][self.ref_point_idx]
-            # ).reshape((-1, 1))
-            vel_ang_quat_ref = jnp.vstack(
-                (0.0, vel_ang_ref)
-            )  # Prepend 0 for quaternion multiplication
+                # Get nominal dynamics from the learned model
+                action_raw = action_raw.reshape((-1,1))
+                action_raw_pos = action_raw[:3]  # Position dynamics
 
-            # Compute the CLF derivative terms
-            s_p = jnp.vdot(err_pos, vel_pos - vel_pos_ref)  # Position term
-            s_q = jnp.vdot(
-                err_quat / 2.0,
-                quat_mult(vel_ang_quat[:, 0], quat).reshape((-1, 1))
-                - quat_mult(vel_ang_quat_ref[:, 0], ref_quat.reshape((-1, 1))).reshape(
-                    (-1, 1)
-                ),
-            )  # Quaternion term
+                # Angular velocity from the model
+                action_raw_euler = action_raw[3:].reshape((-1,1))
+                action_raw_quat = jnp.vstack((0.0, action_raw_euler))  # Prepend 0 for quaternion multiplication
 
-            s = s_p + s_q  # Combined CLF derivative
+                # Compute the CLF derivative terms
+                s_p = jnp.vdot(err_pos, action_raw_pos - action_ref_pos)  # Position term
+                s_q = jnp.vdot(err_quat/2.0, quat_mult(action_raw_quat[:, 0], cur_quat[:, 0]).reshape((-1,1)) - quat_mult(action_ref_quat[:, 0], ref_quat[:, 0]).reshape((-1,1)))  # Quaternion term
 
-            # Construct quaternion matrix for quaternion dynamics
-            Q = jnp.array(
-                [
-                    [quat[0, 0], quat[1, 0], quat[2, 0], quat[3, 0]],
-                    [-quat[1, 0], quat[0, 0], quat[3, 0], -quat[2, 0]],
-                    [-quat[2, 0], -quat[3, 0], quat[0, 0], quat[1, 0]],
-                    [-quat[3, 0], quat[2, 0], -quat[1, 0], quat[0, 0]],
-                ]
-            )
-            Q2 = Q[:, 1:]  # 4 x 3
-            Q2_minus = -Q2
-            Q2_1 = jnp.vstack((Q2_minus[0, :], -Q2_minus[1:, :]))
+                s = s_p + s_q  # Combined CLF derivative
 
-            # Construct the CLF constraint for the QP
-            G_opt = 2 * jnp.hstack((err_pos.T, (err_quat.T / 2.0) @ Q2_1)).reshape(
-                1, -1
-            )  # Ensure shape (1,6)
-            h_opt = jnp.array([-alpha_V * V - 2 * s]).reshape(-1)  # Ensure shape (1,)
+                # Construct quaternion matrix for quaternion dynamics
+                Q = jnp.array([[cur_quat[0, 0], cur_quat[1, 0], cur_quat[2, 0], cur_quat[3, 0]],
+                                [-cur_quat[1, 0], cur_quat[0,0], cur_quat[3, 0], -cur_quat[2, 0]],
+                                [-cur_quat[2, 0], -cur_quat[3, 0], cur_quat[0, 0], cur_quat[1, 0]],
+                                [-cur_quat[3, 0], cur_quat[2, 0], -cur_quat[1, 0], cur_quat[0, 0]]])
+                Q2 = Q[:, 1:] # 4 x 3
+                Q2_minus = -Q2
+                Q2_1 = jnp.vstack((Q2_minus[0, :], -Q2_minus[1:,:]))
 
-            # Initialize QP solver
-            qp = OSQP()
+                # Construct the CLF constraint for the QP
+                G_opt = 2*jnp.hstack((err_pos.T, (err_quat.T/2.0) @ Q2_1))
+                h_opt = jnp.array([-alpha_V*V - 2*s])
 
-            # Solve the QP to find optimal control inputs
-            sol = qp.run(
-                params_obj=(Q_opt, jnp.zeros(Q_opt.shape[0])),
-                params_ineq=(G_opt, h_opt),
-            ).params
+                # qp = OSQP()
+                # sol = qp.run(params_obj=(Q_opt,jnp.zeros(Q_opt.shape[0])), params_ineq=(G_opt, h_opt)).params
+                # ustar = sol.primal.reshape((-1,1))
 
-            ustar = sol.primal.reshape((-1, 1))
+                ustar = qp_solve(Q_opt, G_opt, h_opt).primal.reshape((-1,1))
 
-            # Extract position and angular velocity control inputs
-            u_pos = ustar[:3]
-            u_ang_quat = jnp.vstack((0.0, ustar[3:]))
+                # # Extract position and angular velocity control inputs
+                # u_p_x = ustar[:3]
+                # u_w_x = jnp.vstack((0.0, ustar[3:]))
 
-            # Compute state derivatives with the control inputs
-            p_dot = 0.1 * vel_pos + u_pos  # Position derivative
-            q_dot = 0.5 * quat_mult(
-                vel_ang_quat[:, 0] + u_ang_quat[:, 0], quat
-            ).reshape((-1, 1))
+                # # Compute state derivatives with the control inputs
+                # action_pos = action_raw_pos + u_p_x  # Position derivative
+                # action_euler = action_raw_euler + ustar[3:]
+                return np.array(action_raw + ustar).flatten()
+                q_dot = 0.5*quat_mult(action_raw_quat[:, 0] + u_w_x[:, 0], cur_quat).reshape((-1,1))  # Quaternion derivative    
 
-            q_dot_Quat = Quaternion(q_dot[0][0], q_dot[1:].reshape(-1))
-            q_dot_Quat.normalize()
-            # Combine into full state derivative
-            x_dot_cmd = np.concatenate(
-                (p_dot.reshape(-1), q_dot_Quat.axis_angle().reshape(-1))
-            )
+                def compute_euler_rates(q, q_dot):
+                    """
+                    Computes Euler angle rates (droll, dpitch, dyaw) from the quaternion derivative.
+                    
+                    Parameters:
+                    q     : array-like, shape (4,)
+                            The unit quaternion [w, x, y, z].
+                    q_dot : array-like, shape (4,)
+                            The time derivative of the quaternion.
+                            
+                    Returns:
+                    euler_rates : np.array, shape (3,)
+                                    The Euler angle rates [droll, dpitch, dyaw].
+                                    
+                    The computation is done in two steps:
+                    1. Convert the quaternion derivative to the body angular velocity:
+                        ω = 2 * (q_dot ⊗ q_conjugate)
+                    2. Map the angular velocity to Euler angle rates using:
+                        [droll, dpitch, dyaw]^T = T(roll, pitch) * ω,
+                        where T is the Jacobian for the ZYX Euler angles.
+                    """
+                    q = np.asarray(q)
+                    q_dot = np.asarray(q_dot)
+                    
+                    # Compute quaternion conjugate: q* = [w, -x, -y, -z]
+                    q_conj = np.array([q[0], -q[1], -q[2], -q[3]])
+                    
+                    # Compute the product: q_dot ⊗ q_conj
+                    quat_product = quat_mult(q_dot, q_conj)
+                    
+                    # Extract the angular velocity (vector part) and scale by 2.
+                    # Ideally, the scalar part of the result should be zero.
+                    omega = 2 * quat_product[1:]
+                    
+                    # Get Euler angles from the quaternion.
+                    roll, pitch, yaw = quat_to_euler(q)
+                    
+                    # Build the transformation matrix (Jacobian) for ZYX Euler angles.
+                    # T relates the body angular velocity ω = [ωx, ωy, ωz]^T to the Euler rates.
+                    # Note: be cautious near pitch = ±90° (gimbal lock).
+                    T = np.array([
+                        [1, np.sin(roll)*np.tan(pitch),  np.cos(roll)*np.tan(pitch)],
+                        [0, np.cos(roll),              -np.sin(roll)],
+                        [0, np.sin(roll)/np.cos(pitch),  np.cos(roll)/np.cos(pitch)]
+                    ])
+                    
+                    # Compute Euler angle rates by multiplying the transformation matrix with the angular velocity.
+                    euler_rates = T @ omega
+                    return euler_rates  # Returns [droll, dpitch, dyaw]   
 
-            return x_dot_cmd
+                # euler_dot = compute_euler_rates(cur_quat.flatten(), q_dot.flatten()).reshape((-1,1))
+                
+                # Combine into full state derivative
+                x_dot_cmd = jnp.vstack((action_pos, q_dot))[:, 0]
+
+                return x_dot_cmd
+        
+    
 
     def _choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int]:
         """
