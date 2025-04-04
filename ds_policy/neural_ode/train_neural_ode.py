@@ -294,16 +294,8 @@ def train(
     
     print(f"Using device: {device}")
     
-    data_size = x[0].shape[-1]
-    if save_path is None:
-        if data_size == 3:
-            save_path = f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos.pt"
-        elif data_size == 7:
-            save_path = (
-                f"DS-Policy/models/mlp_width{width_size}_depth{depth}_pos_quat.pt"
-            )
-        else:
-            raise ValueError(f"Invalid data size: {data_size}")
+    input_size = x[0].shape[-1]
+    output_size = x_dot[0].shape[-1]
 
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
@@ -318,7 +310,7 @@ def train(
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     # Initialize model
-    model = NeuralODE(data_size, width_size, depth).to(device)
+    model = NeuralODE(input_size, output_size, width_size, depth).to(device)
 
     # Training loop with curriculum learning
     for phase, (lr, epochs) in enumerate(zip(lr_strategy, epoch_strategy)):

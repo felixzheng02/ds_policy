@@ -268,8 +268,19 @@ if __name__ == "__main__":
             }
             # Alternatively, you could use a unified model:
             # 'unified_model': {
-            #     'load_path': f"models/mlp_width256_depth5_unified_{option}.pt",
-            #     'device': "cpu" 
+                # Specify load_path to load an existing model
+                # 'load_path': f"models/mlp_width128_depth3_pos_ang_vel_{option}.pt",
+                # Or provide training parameters if model doesn't exist yet
+            #     'width': 256,
+            #     'depth': 5,
+            #     'save_path': f"models/mlp_width256_depth5_pos_ang_vel_{option}.pt",
+            #     'batch_size': 100,
+            #     'device': "mps",  # Can be "cpu", "cuda", or "mps"
+            #     'lr_strategy': (1e-3, 1e-4, 1e-5),
+            #     'epoch_strategy': (50, 50, 50),
+            #     'length_strategy': (0.4, 0.7, 1),
+            #     'plot': True,
+            #     'print_every': 10
             # }
         }
 
@@ -301,13 +312,13 @@ if __name__ == "__main__":
         )
         
         simulator.simulate(
-            np.concatenate([x[4][0], quat_to_euler(q[4][0])]),
+            np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
             # init_state,
             "ds_policy/data/test_ds_policy.npz",
             n_steps=100,
             clf=True,
             alpha_V=1,
-            lookahead=20,
+            lookahead=10,
         )
     
     # Load and visualize the results
