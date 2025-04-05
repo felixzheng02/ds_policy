@@ -10,7 +10,7 @@ from ds_policy.ds_utils import load_data, euler_to_quat, quat_to_euler
 
 def update_state(cur_state, vel, dt):
     pos_vel = vel[:3]
-    ang_vel = vel[3:]
+    ang_vel = vel[3:6]
 
     new_pos = cur_state[:3] + pos_vel * dt
 
@@ -31,6 +31,7 @@ class Simulator:
         self.ds_policy = ds_policy
         self.traj = []
         self.ref_traj_indices = []
+        self.ref_point_indices = []
 
     def simulate(
         self,
@@ -44,7 +45,7 @@ class Simulator:
         state = init_state
         for i in range(n_steps):
             self.traj.append(state.copy())
-            quat = euler_to_quat(state[3:])
+            quat = R.from_euler('xyz', state[3:]).as_quat()
             action = self.ds_policy.get_action(
                 np.concatenate([state[:3], quat]),
                 clf=clf,
@@ -53,6 +54,7 @@ class Simulator:
             )
             if clf:
                 self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
+                self.ref_point_indices.append(self.ds_policy.ref_point_idx)
             state = update_state(state, action, 1/60)
 
         demo_trajs = [
@@ -66,9 +68,10 @@ class Simulator:
             demo_trajs=demo_trajs,
             traj=self.traj,
             ref_traj_indices=self.ref_traj_indices,
+            ref_point_indices=self.ref_point_indices,
             allow_pickle=True,
         )
-        return self.traj, demo_trajs, self.ref_traj_indices
+        return self.traj, demo_trajs, self.ref_traj_indices, self.ref_point_indices
 
 
 class Animator:
@@ -78,16 +81,20 @@ class Animator:
         traj: np.ndarray,
         demo_trajs: list[np.ndarray],
         ref_traj_indices: list[int],
+        ref_point_indices: list[int],
     ):
         self.traj = traj
         self.demo_trajs = demo_trajs
         self.ref_traj_indices = ref_traj_indices
+        self.ref_point_indices = ref_point_indices
         self.generated_line = None
         self.demo_lines = []
         self.ref_line = None
         self.start_point = None
         self.arrow_container = [None]
+        self.ref_arrow_container = [None]
         self.orientation_label = None
+        self.ref_orientation_label = None
         self.ax = None
         self.demo_line_alpha = None
 
@@ -124,9 +131,11 @@ class Animator:
             [self.traj[0, 1]],
             [self.traj[0, 2]],
         )
-        # Arrow text label
+        # Arrow text labels
         self.orientation_label = self.ax.text(0, 0, 0, "Orientation", color="orange")
+        self.ref_orientation_label = self.ax.text(0, 0, 0, "Ref Orientation", color="purple")
         self.orientation_label.set_visible(False)  # Hide initially
+        self.ref_orientation_label.set_visible(False)  # Hide initially
 
         total_frames = len(self.traj) - 1
 
@@ -168,13 +177,12 @@ class Animator:
         # Get current position
         pos = self.traj[frame, :3]
 
-        # Convert Euler angles to direction vector
+        # Convert Euler angles to direction vector for current pose
         euler_angles = self.traj[frame, 3:]
-        quat = euler_to_quat(euler_angles)
-        quat = demo_trajs[0][frame, 3:] # NOTE: visualize demo trajectory's orientation
+        quat = R.from_euler('xyz', euler_angles).as_quat()
 
         # Create direction vector from quaternion
-        w, x, y, z = quat
+        x, y, z, w = quat
 
         # Calculate the raw direction vector from quaternion (before scaling)
         dx = 1 - 2 * (y**2 + z**2)
@@ -188,16 +196,18 @@ class Animator:
         dz /= magnitude
 
         # Apply arrow length scaling for visualization
-        arrow_length = 0.05  # Reduced from 0.2 to make arrow shorter
+        arrow_length = 0.05
         dx_scaled = arrow_length * dx
         dy_scaled = arrow_length * dy
         dz_scaled = arrow_length * dz
 
-        # Remove previous arrow if it exists
+        # Remove previous arrows if they exist
         if self.arrow_container[0] is not None:
             self.arrow_container[0].remove()
+        if self.ref_arrow_container[0] is not None:
+            self.ref_arrow_container[0].remove()
 
-        # Create new arrow
+        # Create new arrow for current pose
         self.arrow_container[0] = self.ax.quiver(
             pos[0],
             pos[1],
@@ -210,7 +220,7 @@ class Animator:
             label="Orientation" if frame == 0 else None,
         )
 
-        # Update label position and make it visible
+        # Update current orientation label position and make it visible
         self.orientation_label.set_position(
             (
                 pos[0] + dx_scaled * 0.7,
@@ -220,12 +230,62 @@ class Animator:
         )
         self.orientation_label.set_visible(True)
 
+        # Add reference point visualization if available
+        if len(self.ref_point_indices) > 0 and self.ref_point_indices[frame] is not None:
+            ref_traj_idx = self.ref_traj_indices[frame]
+            ref_point_idx = self.ref_point_indices[frame]
+            ref_point = self.demo_trajs[ref_traj_idx][ref_point_idx]
+            ref_pos = ref_point[:3]
+            ref_quat = ref_point[3:7]
+
+            # Calculate reference orientation vector
+            x, y, z, w = ref_quat
+            ref_dx = 1 - 2 * (y**2 + z**2)
+            ref_dy = 2 * (x * y - w * z)
+            ref_dz = 2 * (x * z + w * y)
+
+            # Normalize reference vector
+            ref_magnitude = np.sqrt(ref_dx**2 + ref_dy**2 + ref_dz**2)
+            ref_dx /= ref_magnitude
+            ref_dy /= ref_magnitude
+            ref_dz /= ref_magnitude
+
+            # Scale reference arrow
+            ref_dx_scaled = arrow_length * ref_dx
+            ref_dy_scaled = arrow_length * ref_dy
+            ref_dz_scaled = arrow_length * ref_dz
+
+            # Create reference arrow
+            self.ref_arrow_container[0] = self.ax.quiver(
+                ref_pos[0],
+                ref_pos[1],
+                ref_pos[2],
+                ref_dx_scaled,
+                ref_dy_scaled,
+                ref_dz_scaled,
+                color="purple",
+                linewidth=3,
+                label="Reference Orientation" if frame == 0 else None,
+            )
+
+            # Update reference orientation label
+            self.ref_orientation_label.set_position(
+                (
+                    ref_pos[0] + ref_dx_scaled * 0.7,
+                    ref_pos[1] + ref_dy_scaled * 0.7,
+                    ref_pos[2] + ref_dz_scaled * 0.7,
+                )
+            )
+            self.ref_orientation_label.set_visible(True)
+
         return (
             self.generated_line,
             self.ref_line,
             self.start_point,
             self.arrow_container[0],
             self.orientation_label,
+            self.ref_arrow_container[0],
+            self.ref_orientation_label,
         )
 
 
@@ -234,7 +294,7 @@ if __name__ == "__main__":
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
         option = "move_towards"
-        x, x_dot, q, omega = load_data(option, transform_to_handle_frame=True, debug_on=False)
+        x, x_dot, q, omega, gripper = load_data("open_single_door", option, finger=True, transform_to_handle_frame=True, debug_on=False)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
 
@@ -259,7 +319,7 @@ if __name__ == "__main__":
             },
             'quat_model': {
                 # Either use special mode
-                'special_mode': 'none',
+                'special_mode': 'simple', # Can be "none", "simple"
                 # Or specify load_path to load an existing model
                 # 'load_path': f"models/quat_model_{option}.json",
                 # Or specify training parameters
@@ -284,12 +344,12 @@ if __name__ == "__main__":
             # }
         }
 
-        # Initialize DS policy with the new model_config parameter
         ds_policy = DSPolicy(
             x=x, 
             x_dot=x_dot, 
             quat=q, 
             omega=omega, 
+            gripper=gripper,
             model_config=model_config,
             dt=1/60, 
             switch=False, 
@@ -300,25 +360,27 @@ if __name__ == "__main__":
         
         # Randomly initialize starting point
         # Set random seed for reproducibility
-        rng = np.random.default_rng(seed=3)
+        # rng = np.random.default_rng(seed=3)
+        rng = np.random.RandomState()
         init_pos_x = rng.uniform(low=-0.3, high=0.3)  # Random x,y,z position
         init_pos_y = rng.uniform(low=-0.4, high=-0.1)
         init_pos_z = rng.uniform(low=-0.3, high=0.3)
         # Set the same random seed for quaternion initialization to ensure reproducibility
-        quat_rng = np.random.RandomState(seed=4)
+        # quat_rng = np.random.RandomState(seed=3)
+        quat_rng = np.random.RandomState()
         init_euler = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
         init_state = np.concatenate(
             [np.array([init_pos_x, init_pos_y, init_pos_z]), init_euler]
         )
         
         simulator.simulate(
-            np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
-            # init_state,
+            # np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
+            init_state,
             "ds_policy/data/test_ds_policy.npz",
-            n_steps=100,
+            n_steps=300,
             clf=True,
-            alpha_V=1,
-            lookahead=10,
+            alpha_V=10,
+            lookahead=20,
         )
     
     # Load and visualize the results
@@ -326,5 +388,6 @@ if __name__ == "__main__":
     demo_trajs = data["demo_trajs"]
     traj = data["traj"]
     ref_traj_indices = data["ref_traj_indices"]
-    animator = Animator(traj, demo_trajs, ref_traj_indices)
+    ref_point_indices = data["ref_point_indices"]
+    animator = Animator(traj, demo_trajs, ref_traj_indices, ref_point_indices)
     animator.animate(None)

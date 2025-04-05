@@ -56,6 +56,7 @@ class DSPolicy:
         x_dot: list[np.ndarray],
         quat: list[np.ndarray],
         omega: list[np.ndarray],
+        gripper: list[np.ndarray],
         model_config: dict,
         dt: float = 0.01,
         switch: bool = False,
@@ -72,6 +73,7 @@ class DSPolicy:
             x_dot: List of velocity trajectories from demonstrations
             quat: List of quaternion trajectories from demonstrations
             omega: List of angular velocity trajectories from demonstrations
+            gripper: List of gripper trajectories from demonstrations
             model_config: Configuration dictionary for models with structure:
                 - unified_model (dict, optional): Configuration for unified position+orientation model
                     - load_path (str, optional): Path to load pre-trained model
@@ -96,6 +98,7 @@ class DSPolicy:
         self.x_dot = x_dot
         self.quat = quat
         self.omega = omega
+        self.gripper = gripper
         self.switch = switch
         self.lookahead = lookahead
         self.backtrack_steps = backtrack_steps
@@ -126,6 +129,7 @@ class DSPolicy:
         self.pos_none = False
         self.pos_avg = False
         self.quat_none = False
+        self.quat_simple = False
         self._configure_models(model_config)
         self._validate_model_setup()
 
@@ -143,16 +147,20 @@ class DSPolicy:
         Can optionally apply Control Lyapunov Function (CLF) constraints for stability.
         
         Args:
-            state: Current state vector [position (3), quaternion (4)]
+            state: Current state vector [position (3), quaternion (4)] NOTE: quaternion needs to be in xyzw format
             clf: If True, apply Control Lyapunov Function constraints
             alpha_V: CLF convergence rate parameter
             lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
             
         Returns:
-            action: Control action [linear velocity (3), angular velocity (3)]
+            action: Control action [linear velocity (3), angular velocity (3), gripper (1)]
         """
         if lookahead is not None:
             self.lookahead = lookahead
+
+        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(
+            state[: 3], self.switch
+        )
 
         action_raw = self._get_action_raw(
             state
@@ -161,7 +169,11 @@ class DSPolicy:
             action = self._apply_clf(state, action_raw, alpha_V)
         else:
             action = action_raw
-        return action
+        if len(self.gripper) > 0:
+            gripper_action = self.gripper[self.ref_traj_idx][self.ref_point_idx]
+        else:
+            gripper_action = np.zeros(1)
+        return np.concatenate([action, gripper_action])
     
     def update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = None, radius: float = None, angle_threshold: float = None, lookahead: int = None
@@ -170,7 +182,7 @@ class DSPolicy:
         Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
         
         Args:
-            state: Current state (x, y, z, qw, qx, qy, qz)
+            state: Current state (x, y, z, qx, qy, qz, qw)
             mode: "trajectory" or "point"
             penalty: Factor to reduce probability for trajectories with close points
             traj_threshold: Threshold distance to consider a trajectory as "close"
@@ -336,13 +348,12 @@ class DSPolicy:
         Returns:
             action: Raw control action [linear velocity (3), angular velocity (3)]
         """
+        if self.model is not None:
+            with torch.no_grad():
+                return self.model.forward(state).numpy()
+            
         if self.pos_none:
-            if self.quat_none:
-                return np.zeros(6)
-            q_curr = R.from_quat(state[3:])
-            _, _, omega = self.quat_model._step(q_curr, self.dt)            
-            return np.concatenate([np.zeros(3), omega])
-        
+            action_pos = np.zeros(3)
         elif self.pos_avg:
             # Find all points from self.x whose distance is close to current state
             x_curr = state[:3]
@@ -365,32 +376,39 @@ class DSPolicy:
             
             # If no close points found, use the model directly
             if len(close_points_velocities) == 0:
-                x_dot = np.zeros(3)
+                action_pos = np.zeros(3)
             else:
                 # Average the velocities of close points
-                x_dot = np.mean(np.array(close_points_velocities), axis=0)
+                action_pos = np.mean(np.array(close_points_velocities), axis=0)
+        elif self.pos_model is not None:
+            with torch.no_grad():
+                action_pos = self.pos_model.forward(state[:3]).numpy()
+        else:
+            raise ValueError("Cannot get position action")
+        
+        if self.quat_none:
+            action_ang = np.zeros(3)
+        elif self.quat_simple: # NOTE: this implements a PD controller for the orientation error
+            cur_quat = R.from_quat(state[3:])
+            ref_quat = R.from_quat(self.quat[self.ref_traj_idx][self.ref_point_idx])
+            R_err = ref_quat * cur_quat.inv()
+            action_ang = R_err.as_rotvec()
+            # R_err = cur_quat.inv() * ref_quat
+            # # Extract quaternion [x, y, z, w] from error rotation
+            # e_quat = R_err.as_quat()
+            # e_vec = e_quat[:3]  # vector part
+            # e0 = e_quat[3]   # scalar part
+            # # Sign of scalar part (to ensure shortest rotation direction)
+            # sign_e0 = 1.0 if e0 >= 0.0 else -1.0
+            # # Proportional term (factor of 2 often used from quaternion kinematics)
+            # action_ang = 2.0 * sign_e0 * e_vec
+        elif self.quat_model is not None:
+            with torch.no_grad():
+                action_ang = self.quat_model._step(R.from_quat(state[3:]), self.dt)[2]
+        else:
+            raise ValueError("Cannot get orientation action")
             
-            # Get orientation part
-            if self.quat_none:
-                return np.concatenate([x_dot, np.zeros(3)])
-            q_curr = R.from_quat(state[3:])
-            _, _, omega = self.quat_model._step(q_curr, self.dt)            
-
-            return np.concatenate([x_dot, omega])
-
-        elif self.model is None:  # pos_model and quat_model are separate
-            with torch.no_grad():
-                x_dot = self.pos_model.forward(state[: 3]).numpy()
-
-            if self.quat_none:
-                return np.concatenate([x_dot, np.zeros(3)])
-            q_curr = R.from_quat(state[3 :])
-            _, _, omega = self.quat_model._step(q_curr, self.dt)
-
-            return np.concatenate([x_dot, omega])
-        else:  # unified model
-            with torch.no_grad():
-                return self.model.forward(state).numpy()
+        return np.concatenate([action_pos, action_ang])
 
     def _compute_vel(self, x: np.ndarray):
         """
@@ -549,16 +567,14 @@ class DSPolicy:
         Returns:
             action: Modified action that satisfies CLF constraints
         """
-        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(
-            current_state[: 3], self.switch
-        )
         ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
         ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
         ref_state = np.concatenate([ref_x, ref_quat])
 
         if (
-            self.quat_model is not None
-        ):  # quat_model already applied clf, only need to apply clf to position
+            self.quat_model is not None # quat_model already applied clf, only need to apply clf to position
+            or self.quat_simple # quat_simple does not need clf
+        ):  
             current_x = current_state[: 3]
             f_x = action_raw[: 3]
             if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
@@ -635,8 +651,8 @@ class DSPolicy:
             err = cur_state - ref_state
             # Normalize quaternion error
             err = err.at[3:].set(err[3:]/jnp.linalg.norm(err[3:]))
-            err_pos = err[:3]  # Position error
-            err_quat = err[3:]  # Quaternion error
+            err_pos = cur_state[:3] - ref_state[:3]  # Position error
+            err_quat = quat_mult(ref_quat.flatten(), R.from_quat(cur_quat.flatten()).inv().as_quat()).reshape((-1,1)) # Quaternion error
             
             # Lyapunov function (quadratic in the error)
             V = jnp.sum(jnp.square(2*err))/4
@@ -840,6 +856,9 @@ class DSPolicy:
             self.quat_none = quat_config.get('special_mode', None) == 'none'
             if self.quat_none:
                 return
+            self.quat_simple = quat_config.get('special_mode', None) == 'simple'
+            if self.quat_simple:
+                return
             
             # Check if loading pre-trained model
             if 'load_path' in quat_config:
@@ -868,5 +887,5 @@ class DSPolicy:
         if not self.pos_none and not self.pos_avg and self.pos_model is None:
             raise ValueError("Either set special_mode to 'none' or 'avg' or configure a position model")
         
-        if not self.quat_none and self.quat_model is None:
+        if not self.quat_none and not self.quat_simple and self.quat_model is None:
             raise ValueError("Either set special_mode to 'none' or configure a quaternion model")

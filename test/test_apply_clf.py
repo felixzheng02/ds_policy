@@ -11,8 +11,8 @@ from test_ds_policy import update_state
 
 
 if __name__ == "__main__":
-    x, x_dot, q, omega = load_data("move_towards", transform_to_handle_frame=True, debug_on=False)
-    index = 3
+    x, x_dot, q, omega, gripper = load_data("open_single_door", "move_towards", finger=True, transform_to_handle_frame=True, debug_on=False)
+    index = 4
     demo_pos = x[index]
     demo_quat = q[index]
     demo_euler = quat_to_euler(demo_quat)
@@ -29,6 +29,7 @@ if __name__ == "__main__":
         x_dot,
         q,
         omega,
+        gripper,
         model_config=model_config,
         dt=1/60, 
         switch=False, 
@@ -39,7 +40,7 @@ if __name__ == "__main__":
     traj = [cur_state]
     for i in range(demo_pos.shape[0]):
         cur_quat = euler_to_quat(cur_state[3:])
-        vel = ds_policy._apply_clf(np.concatenate([cur_state[:3], cur_quat]), np.zeros(6), alpha_V=50)
+        vel = ds_policy._apply_clf(np.concatenate([cur_state[:3], cur_quat]), np.zeros(6), alpha_V=10)
         cur_state = update_state(cur_state, vel, 1/60)
         traj.append(cur_state)
 

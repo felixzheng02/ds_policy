@@ -174,7 +174,7 @@ cython_debug/
 *.mp4
 
 # Custom data directory
-custom_data/
+demo_data/
 
 # Explicitly ignore Python cache in package directory
 ds_policy/__pycache__/

@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import math
 
 
-def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: bool = False):
+def load_data(path: str, option: str, finger: bool = False, transform_to_handle_frame: bool = True, debug_on: bool = False):
     if option == "move_towards":
         seg_num_int = 0
     elif option == "move_away":
@@ -19,8 +19,8 @@ def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: boo
     input_path = os.path.join(
         os.path.dirname(os.path.realpath(__file__)),
         "..",
-        "custom_data",
-        "smoothing_window_21_quat",
+        "demo_data",
+        path,
     )
     seg_num = str(seg_num_int).zfill(2)
     traj_files = [
@@ -34,6 +34,7 @@ def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: boo
     x_dot = []
     quat_traj_all = []
     ang_vel_traj_all = []
+    gripper_traj = []
 
     for l in range(L):
         demo_num = str(l).zfill(2)
@@ -50,6 +51,12 @@ def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: boo
                 input_path, f"demo_{demo_num}_seg_{seg_num}_handle_traj.npy"
             )
         )
+        if finger:
+            finger_dist_traj = np.load(
+                os.path.join(
+                    input_path, f"demo_{demo_num}_seg_{seg_num}_finger_dist_traj.npy"
+                )
+            )
         contact_traj = np.load(
             os.path.join(
                 input_path, f"demo_{demo_num}_seg_{seg_num}_contact_traj.npy"
@@ -145,7 +152,14 @@ def load_data(option: str, transform_to_handle_frame: bool = True, debug_on: boo
         x_dot.append(vel_traj)
         quat_traj_all.append(quat_traj_final)
         ang_vel_traj_all.append(ang_vel_traj)
-    return x, x_dot, quat_traj_all, ang_vel_traj_all
+
+        # gripper control
+        if finger:
+            gripper_threshold = 0.1 # threshold to distinguish open and close
+            gripper_traj.append(finger_dist_traj < gripper_threshold) # close=1, open=0
+
+
+    return x, x_dot, quat_traj_all, ang_vel_traj_all, gripper_traj
 
 
 def quat_to_euler(quat):
