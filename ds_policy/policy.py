@@ -176,14 +176,14 @@ class DSPolicy:
         return np.concatenate([action, gripper_action])
     
     def update_demo_traj_probs(
-        self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = None, radius: float = None, angle_threshold: float = None, lookahead: int = None
+        self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
     ):
         """
         Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
         
         Args:
             state: Current state (x, y, z, qx, qy, qz, qw)
-            mode: "trajectory" or "point"
+            mode: "trajectory", "cur_point" or "ref_point"
             penalty: Factor to reduce probability for trajectories with close points
             traj_threshold: Threshold distance to consider a trajectory as "close"
             radius: Threshold distance to consider a trajectory point as "close"
@@ -192,10 +192,19 @@ class DSPolicy:
         """
         if lookahead is not None:
             self.lookahead = lookahead
-        if mode == "point":
+        if mode == "cur_point":
             for i in range(len(self.x)):
                 distances = np.sqrt(np.sum((self.x[i] - state[:3]) ** 2, axis=1))
                 angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * state[3:], axis=1)))
+                mask = np.logical_and(distances < radius, angles < angle_threshold)
+                if np.any(mask):
+                    self.demo_traj_probs[i] *= penalty
+        elif mode == "ref_point":
+            for i in range(len(self.x)):
+                cur_ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
+                cur_ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
+                distances = np.sqrt(np.sum((self.x[i] - cur_ref_x) ** 2, axis=1))
+                angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * cur_ref_quat, axis=1)))
                 mask = np.logical_and(distances < radius, angles < angle_threshold)
                 if np.any(mask):
                     self.demo_traj_probs[i] *= penalty
