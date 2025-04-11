@@ -104,8 +104,10 @@ class DSPolicy:
         self.backtrack_steps = backtrack_steps
 
         self.demo_traj_probs = np.ones(len(x)) if demo_traj_probs is None else demo_traj_probs
+        self.demo_traj_scores = None
         self.ref_traj_idx = None
-        self.ref_point_idx = None
+        self.ref_point_idx_lookahead = None
+        self.ref_point_idx_no_lookahead = None
 
         # Initialize models to None
         self.model = None  # unified model
@@ -158,7 +160,7 @@ class DSPolicy:
         if lookahead is not None:
             self.lookahead = lookahead
 
-        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(
+        self.ref_traj_idx, self.ref_point_idx_lookahead, self.ref_point_idx_no_lookahead = self._choose_ref(
             state[: 3], self.switch
         )
 
@@ -170,7 +172,7 @@ class DSPolicy:
         else:
             action = action_raw
         if len(self.gripper) > 0:
-            gripper_action = self.gripper[self.ref_traj_idx][self.ref_point_idx]
+            gripper_action = self.gripper[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
         else:
             gripper_action = np.zeros(1)
         return np.concatenate([action, gripper_action])
@@ -201,8 +203,8 @@ class DSPolicy:
                     self.demo_traj_probs[i] *= penalty
         elif mode == "ref_point":
             for i in range(len(self.x)):
-                cur_ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
-                cur_ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
+                cur_ref_x = self.x[self.ref_traj_idx][self.ref_point_idx_lookahead]
+                cur_ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx_lookahead]
                 distances = np.sqrt(np.sum((self.x[i] - cur_ref_x) ** 2, axis=1))
                 angles = 2 * np.arccos(np.abs(np.sum(self.quat[i] * cur_ref_quat, axis=1)))
                 mask = np.logical_and(distances < radius, angles < angle_threshold)
@@ -256,12 +258,17 @@ class DSPolicy:
             if max_prob > 0:  # Avoid division by zero
                 self.demo_traj_probs = self.demo_traj_probs / max_prob
 
-        self.ref_traj_idx, self.ref_point_idx = self._choose_ref(state[:3], True)
+        self.ref_traj_idx, self.ref_point_idx_lookahead, self.ref_point_idx_no_lookahead = self._choose_ref(
+            state[: 3], True # NOTE: this is necessary! Forces resampling even self.switch is False. _choose_ref does not modify self.switch
+        )
+
+    def init_demo_traj_scores(self, x_state):
+        self._choose_ref(x_state, True)
 
     def reset(self):
         self.demo_traj_probs = np.ones(len(self.x))
         self.ref_traj_idx = None
-        self.ref_point_idx = None
+        self.ref_point_idx_lookahead = None
 
     def _load_node(self, model_path: str, input_dim: int, output_dim: int) -> NeuralODE:
         """
@@ -399,7 +406,7 @@ class DSPolicy:
             action_ang = np.zeros(3)
         elif self.quat_simple: # NOTE: this implements a PD controller for the orientation error
             cur_quat = R.from_quat(state[3:])
-            ref_quat = R.from_quat(self.quat[self.ref_traj_idx][self.ref_point_idx])
+            ref_quat = R.from_quat(self.quat[self.ref_traj_idx][self.ref_point_idx_lookahead])
             R_err = ref_quat * cur_quat.inv()
             action_ang = R_err.as_rotvec()
             # R_err = cur_quat.inv() * ref_quat
@@ -576,8 +583,8 @@ class DSPolicy:
         Returns:
             action: Modified action that satisfies CLF constraints
         """
-        ref_x = self.x[self.ref_traj_idx][self.ref_point_idx]
-        ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx]
+        ref_x = self.x[self.ref_traj_idx][self.ref_point_idx_lookahead]
+        ref_quat = self.quat[self.ref_traj_idx][self.ref_point_idx_lookahead]
         ref_state = np.concatenate([ref_x, ref_quat])
 
         if (
@@ -586,10 +593,10 @@ class DSPolicy:
         ):  
             current_x = current_state[: 3]
             f_x = action_raw[: 3]
-            if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
+            if self.ref_point_idx_no_lookahead == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 f_xref = 0
             elif self.pos_none or self.pos_avg:
-                f_xref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
+                f_xref = self.x_dot[self.ref_traj_idx][self.ref_point_idx_lookahead]
             else:
                 with torch.no_grad():
                     f_xref = jnp.array(self.pos_model.forward(ref_x))
@@ -616,7 +623,7 @@ class DSPolicy:
 
         else:  # apply clf to both
             # Get reference dynamics
-            if self.ref_point_idx == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
+            if self.ref_point_idx_no_lookahead == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 vel_pos_ref = np.zeros(3)
                 vel_ang_ref = np.zeros(3)
             elif self.model is not None:
@@ -626,7 +633,7 @@ class DSPolicy:
                     vel_ang_ref = vel_ref[3:]
             else:
                 if self.pos_none or self.pos_avg:
-                    vel_pos_ref = self.x_dot[self.ref_traj_idx][self.ref_point_idx]
+                    vel_pos_ref = self.x_dot[self.ref_traj_idx][self.ref_point_idx_lookahead]
                 else:
                     with torch.no_grad():
                         vel_pos_ref = jnp.array(self.pos_model.forward(ref_x))
@@ -708,7 +715,7 @@ class DSPolicy:
             # action_euler = action_raw_euler + ustar[3:]
             return np.array(action_raw + ustar).flatten()
 
-    def _choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int]:
+    def _choose_ref(self, x_state: np.ndarray, switch: bool = False) -> tuple[int, int, int]:
         """
         Choose reference trajectory and point based on current position.
         
@@ -720,11 +727,12 @@ class DSPolicy:
         
         Args:
             x_state: Current position state (x, y, z)
-            switch: If True, allows switching between trajectories
+            switch: If True, allows switching between trajectories NOTE: this doesn't modify self.switch
             
         Returns:
             ref_traj_idx: Index of the selected reference trajectory
-            ref_point_idx: Index of the selected point within the trajectory
+            ref_point_idx_lookahead: Index of the selected point within the trajectory with lookahead
+            ref_point_idx_no_lookahead: Index of the selected point within the trajectory without lookahead
         """
         if switch or self.ref_traj_idx is None:
             # Calculate distances from current state to each point in each trajectory
@@ -740,12 +748,12 @@ class DSPolicy:
                 closest_distances.append(min_distance)
 
             scores = np.log(self.demo_traj_probs) - np.array(closest_distances)
-            prob_dist = np.exp(scores) / np.sum(np.exp(scores))
+            self.demo_traj_scores = np.exp(scores) / np.sum(np.exp(scores))
 
             # Select the trajectory with the highest probability
             # If multiple trajectories have the same maximum probability, choose one randomly
-            max_prob = np.max(prob_dist)
-            max_indices = np.where(prob_dist == max_prob)[0]
+            max_prob = np.max(self.demo_traj_scores)
+            max_indices = np.where(self.demo_traj_scores == max_prob)[0]
             if len(max_indices) > 1:
                 # Multiple trajectories have the same maximum probability, choose randomly
                 traj_idx = np.random.choice(max_indices)
@@ -764,9 +772,10 @@ class DSPolicy:
             )
             point_idx = np.argmin(distances)
 
-        point_idx = min(point_idx + self.lookahead, self.x[traj_idx].shape[0] - 1)
+        point_idx_no_lookahead = point_idx
+        point_idx_lookahead = min(point_idx + self.lookahead, self.x[traj_idx].shape[0] - 1)
 
-        return int(traj_idx), int(point_idx)
+        return int(traj_idx), int(point_idx_lookahead), int(point_idx_no_lookahead)
 
     def _configure_models(self, model_config):
         """

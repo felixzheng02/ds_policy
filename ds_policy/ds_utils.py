@@ -7,13 +7,22 @@ import jax.numpy as jnp
 import math
 
 
-def load_data(path: str, option: str, finger: bool = False, transform_to_handle_frame: bool = True, debug_on: bool = False):
-    if option == "move_towards":
-        seg_num_int = 0
-    elif option == "move_away":
-        seg_num_int = 1
-    elif option == "reach_behind_and_pull":
-        seg_num_int = 2
+def load_data(task: str, option: str, finger: bool = False, transform_to_object_of_interest_frame: bool = True, debug_on: bool = False):
+    path = task
+    if task == "OpenSingleDoor":
+        object_of_interest = "handle"
+        if option == "move_towards":
+            seg_num_int = 0
+        elif option == "move_away":
+            seg_num_int = 1
+        elif option == "reach_behind_and_pull":
+            seg_num_int = 2
+    elif task == "PnPCounterToCab":
+        object_of_interest = "object"
+        if option == "PnPCounterToCab_Pick_option":
+            seg_num_int = 0
+        elif option == "PnPCounterToCab_Place_option":
+            seg_num_int = 1
     else:
         raise ValueError(f"Invalid option: {option}")
     input_path = os.path.join(
@@ -46,9 +55,9 @@ def load_data(path: str, option: str, finger: bool = False, transform_to_handle_
         eef_traj = np.load(
             os.path.join(input_path, f"demo_{demo_num}_seg_{seg_num}_eef_traj.npy")
         )
-        handle_traj = np.load(
+        object_of_interest_traj = np.load(
             os.path.join(
-                input_path, f"demo_{demo_num}_seg_{seg_num}_handle_traj.npy"
+                input_path, f"demo_{demo_num}_seg_{seg_num}_{object_of_interest}_traj.npy"
             )
         )
         if finger:
@@ -66,18 +75,18 @@ def load_data(path: str, option: str, finger: bool = False, transform_to_handle_
         # Extract positions and rotation matrices
         eef_pos = eef_traj[:, :3]
         eef_quat = eef_traj[:, 3:]
-        handle_pos = handle_traj[:, :3]
-        handle_quat = handle_traj[:, 3:]
+        object_of_interest_pos = object_of_interest_traj[:, :3]
+        object_of_interest_quat = object_of_interest_traj[:, 3:]
         eef_rot = np.array([R.from_quat(q).as_matrix() for q in eef_quat])
 
-        if transform_to_handle_frame:
-            handle_rot = np.array([R.from_quat(q).as_matrix() for q in handle_quat])
+        if transform_to_object_of_interest_frame:
+            object_of_interest_rot = np.array([R.from_quat(q).as_matrix() for q in object_of_interest_quat])
             # Save initial handle pose
-            handle_pos_init = handle_pos[0]
-            handle_rot_init = handle_rot[0]
+            object_of_interest_pos_init = object_of_interest_pos[0]
+            object_of_interest_rot_init = object_of_interest_rot[0]
 
             # Compute relative position in world frame
-            rel_pos_world = eef_pos - handle_pos_init
+            rel_pos_world = eef_pos - object_of_interest_pos_init
 
             # Transform relative positions to initial handle frame
             pos_traj = np.zeros_like(rel_pos_world)
@@ -85,8 +94,8 @@ def load_data(path: str, option: str, finger: bool = False, transform_to_handle_
             rot_traj = np.zeros_like(eef_rot)
             for i in range(len(rel_pos_world)):
                 # Transform to initial handle frame
-                pos_traj[i] = handle_rot_init.T @ rel_pos_world[i]
-                rot_traj[i] = handle_rot_init.T @ eef_rot[i]
+                pos_traj[i] = object_of_interest_rot_init.T @ rel_pos_world[i]
+                rot_traj[i] = object_of_interest_rot_init.T @ eef_rot[i]
         else:
             pos_traj = eef_pos
             rot_traj = eef_rot
@@ -142,12 +151,12 @@ def load_data(path: str, option: str, finger: bool = False, transform_to_handle_
         #     quat_traj_all = [quat_traj]
         #     ang_vel_traj_all = [ang_vel_traj]
         # else:
-        if transform_to_handle_frame:
+        if transform_to_object_of_interest_frame:
             pos_traj_final = pos_traj
             quat_traj_final = quat_traj
         else:
-            pos_traj_final = np.concatenate([eef_pos, handle_pos], axis=1)
-            quat_traj_final = np.concatenate([eef_quat, handle_quat], axis=1)
+            pos_traj_final = np.concatenate([eef_pos, object_of_interest_pos], axis=1)
+            quat_traj_final = np.concatenate([eef_quat, object_of_interest_quat], axis=1)
         x.append(pos_traj_final)
         x_dot.append(vel_traj)
         quat_traj_all.append(quat_traj_final)
@@ -156,7 +165,10 @@ def load_data(path: str, option: str, finger: bool = False, transform_to_handle_
         # gripper control
         if finger:
             gripper_threshold = 0.1 # threshold to distinguish open and close
-            gripper_traj.append(finger_dist_traj < gripper_threshold) # close=1, open=0
+            cur_gripper_traj = finger_dist_traj < gripper_threshold
+            cur_gripper_traj = cur_gripper_traj.astype(float)  # Convert boolean to float
+            cur_gripper_traj[cur_gripper_traj == 0] = -1  # Change 0 (open) to -1
+            gripper_traj.append(cur_gripper_traj)
 
 
     return x, x_dot, quat_traj_all, ang_vel_traj_all, gripper_traj
