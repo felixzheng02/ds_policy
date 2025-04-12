@@ -141,6 +141,7 @@ class DSPolicy:
         clf: bool = True,
         alpha_V: float = 20.0,
         lookahead: int = None,
+        backtrack: bool = False,
     ) -> np.ndarray:
         """
         Generate a control action for the given state.
@@ -153,6 +154,7 @@ class DSPolicy:
             clf: If True, apply Control Lyapunov Function constraints
             alpha_V: CLF convergence rate parameter
             lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
+            backtrack: If True, generate a backtracking action instead of a forward one
             
         Returns:
             action: Control action [linear velocity (3), angular velocity (3), gripper (1)]
@@ -164,6 +166,16 @@ class DSPolicy:
             state[: 3], self.switch
         )
 
+        if backtrack:
+            # Use the negative demonstrated velocity at the reference point
+            backtrack_vel_pos = -self.x_dot[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
+            backtrack_vel_ang = -self.omega[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
+            
+            gripper_action = np.zeros(1)
+            
+            return np.concatenate([backtrack_vel_pos, backtrack_vel_ang, gripper_action])
+
+        # Original logic for forward action
         action_raw = self._get_action_raw(
             state
         )
@@ -621,7 +633,7 @@ class DSPolicy:
 
             return action
 
-        else:  # apply clf to both
+        else:  # apply clf to both NOTE: doesn't work
             # Get reference dynamics
             if self.ref_point_idx_no_lookahead == self.x[self.ref_traj_idx].shape[0] - 1: # TODO: this is different from the original implementation
                 vel_pos_ref = np.zeros(3)

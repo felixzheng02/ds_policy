@@ -11,9 +11,9 @@ def load_data(task: str, option: str, finger: bool = False, transform_to_object_
     path = task
     if task == "OpenSingleDoor":
         object_of_interest = "handle"
-        if option == "move_towards":
+        if option == "OpenSingleDoor_MoveTowards_option":
             seg_num_int = 0
-        elif option == "move_away":
+        elif option == "OpenSingleDoor_MoveAway_option":
             seg_num_int = 1
         elif option == "reach_behind_and_pull":
             seg_num_int = 2
