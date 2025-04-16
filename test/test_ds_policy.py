@@ -3,28 +3,36 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 from scipy.spatial.transform import Rotation as R
-from scipy.linalg import expm
-from ds_policy.policy import DSPolicy
-from ds_policy.ds_utils import load_data, euler_to_quat, quat_to_euler
+from ds_policy.policy import DSPolicy, PositionModelConfig, QuaternionModelConfig, UnifiedModelConfig
+from ds_policy.ds_utils import load_data
 
 
+# State is [x, y, z, qx, qy, qz, qw] (7D)
 def update_state(cur_state, vel, dt):
     pos_vel = vel[:3]
     ang_vel = vel[3:6]
 
     new_pos = cur_state[:3] + pos_vel * dt
 
-    R_cur = R.from_euler('xyz', cur_state[3:]).as_matrix()
-    omega_hat = np.array([
-        [0, -ang_vel[2], ang_vel[1]],
-        [ang_vel[2], 0, -ang_vel[0]],
-        [-ang_vel[1], ang_vel[0], 0]
-    ])
-    delta_R = expm(omega_hat * dt)
-    R_new = R_cur @ delta_R
-    new_euler = R.from_matrix(R_new).as_euler('xyz')
+    # Update orientation using quaternion integration
+    current_quat = cur_state[3:]
+    # Ensure quaternion is normalized
+    current_quat /= np.linalg.norm(current_quat)
     
-    return np.concatenate([new_pos, new_euler])
+    # Convert angular velocity to rotation vector
+    rotation_vector = ang_vel * dt
+    delta_rotation = R.from_rotvec(rotation_vector)
+    
+    # Combine rotations: R_new = delta_R * R_cur
+    # In quaternion terms: q_new = delta_q * q_cur
+    current_rotation = R.from_quat(current_quat)
+    new_rotation = delta_rotation * current_rotation
+    new_quat = new_rotation.as_quat()
+    
+    # Ensure the new quaternion is normalized
+    new_quat /= np.linalg.norm(new_quat)
+
+    return np.concatenate([new_pos, new_quat])
 
 class Simulator:
     def __init__(self, ds_policy):
@@ -35,27 +43,27 @@ class Simulator:
 
     def simulate(
         self,
-        init_state,
+        init_state, # Expecting 7D state [pos, quat]
         save_path: str,
         n_steps: int = 100,
         clf: bool = True,
         alpha_V: float = 10,
         lookahead: int = 5,
     ):
-        state = init_state
+        state = init_state # State is now 7D
         for i in range(n_steps):
-            self.traj.append(state.copy())
-            quat = R.from_euler('xyz', state[3:]).as_quat()
+            self.traj.append(state.copy()) # Store 7D state
+            # Policy expects 7D state [pos, quat]
             action = self.ds_policy.get_action(
-                np.concatenate([state[:3], quat]),
+                state, # Pass the 7D state directly
                 clf=clf,
                 alpha_V=alpha_V,
                 lookahead=lookahead,
             )
             if clf:
                 self.ref_traj_indices.append(self.ds_policy.ref_traj_idx)
-                self.ref_point_indices.append(self.ds_policy.ref_point_idx)
-            state = update_state(state, action, 1/60)
+                self.ref_point_indices.append(self.ds_policy.ref_point_idx_lookahead)
+            state = update_state(state, action, 1/60) # Update 7D state
 
         demo_trajs = [
             np.concatenate([self.ds_policy.x[i], self.ds_policy.quat[i]], axis=-1)
@@ -78,7 +86,7 @@ class Animator:
 
     def __init__(
         self,
-        traj: np.ndarray,
+        traj: np.ndarray, # Trajectory is now N x 7
         demo_trajs: list[np.ndarray],
         ref_traj_indices: list[int],
         ref_point_indices: list[int],
@@ -177,23 +185,13 @@ class Animator:
         # Get current position
         pos = self.traj[frame, :3]
 
-        # Convert Euler angles to direction vector for current pose
-        euler_angles = self.traj[frame, 3:]
-        quat = R.from_euler('xyz', euler_angles).as_quat()
+        # Get current orientation quaternion directly from state
+        quat = self.traj[frame, 3:]
+        rotation = R.from_quat(quat)
 
-        # Create direction vector from quaternion
-        x, y, z, w = quat
-
-        # Calculate the raw direction vector from quaternion (before scaling)
-        dx = 1 - 2 * (y**2 + z**2)
-        dy = 2 * (x * y - w * z)
-        dz = 2 * (x * z + w * y)
-
-        # Normalize to unit vector
-        magnitude = np.sqrt(dx**2 + dy**2 + dz**2)
-        dx /= magnitude
-        dy /= magnitude
-        dz /= magnitude
+        # Create direction vector from rotation matrix (using x-axis)
+        direction_vector = rotation.as_matrix()[:, 2]
+        dx, dy, dz = direction_vector
 
         # Apply arrow length scaling for visualization
         arrow_length = 0.05
@@ -238,17 +236,12 @@ class Animator:
             ref_pos = ref_point[:3]
             ref_quat = ref_point[3:7]
 
-            # Calculate reference orientation vector
-            x, y, z, w = ref_quat
-            ref_dx = 1 - 2 * (y**2 + z**2)
-            ref_dy = 2 * (x * y - w * z)
-            ref_dz = 2 * (x * z + w * y)
+            # Convert reference quaternion to rotation object
+            ref_rotation = R.from_quat(ref_quat)
 
-            # Normalize reference vector
-            ref_magnitude = np.sqrt(ref_dx**2 + ref_dy**2 + ref_dz**2)
-            ref_dx /= ref_magnitude
-            ref_dy /= ref_magnitude
-            ref_dz /= ref_magnitude
+            # Calculate reference orientation vector (using x-axis)
+            ref_direction_vector = ref_rotation.as_matrix()[:, 2]
+            ref_dx, ref_dy, ref_dz = ref_direction_vector
 
             # Scale reference arrow
             ref_dx_scaled = arrow_length * ref_dx
@@ -293,56 +286,30 @@ if __name__ == "__main__":
     if (
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
-        option = "move_towards"
-        x, x_dot, q, omega, gripper = load_data("open_single_door", option, finger=True, transform_to_handle_frame=True, debug_on=False)
+        option = "OpenSingleDoor_MoveTowards_option"
+        x, x_dot, q, omega, gripper = load_data("OpenSingleDoor", option, finger=True, transform_to_object_of_interest_frame=True, debug_on=False)
         demo_trajs = [np.concatenate([pos, rot], axis=1) for pos, rot in zip(x, q)]
         demo_traj_probs = np.ones(len(x))
 
-        # Define model configuration using the new structure
-        model_config = {
-            'pos_model': {
-                # Either use special mode
-                'special_mode': 'none', # Can be "none", "avg"
-                # Or specify load_path to load an existing model
-                # 'load_path': f"models/mlp_width128_depth3_{option}.pt",
-                # Or provide training parameters if model doesn't exist yet
-                # 'width': 128,
-                # 'depth': 3,
-                # 'save_path': f"models/mlp_width128_depth3_{option}.pt",
-                # 'batch_size': 100,
-                # 'device': "cpu",  # Can be "cpu", "cuda", or "mps"
-                # 'lr_strategy': (1e-3, 1e-4, 1e-5),
-                # 'epoch_strategy': (10, 10, 10),
-                # 'length_strategy': (0.4, 0.7, 1),
-                # 'plot': True,
-                # 'print_every': 10
-            },
-            'quat_model': {
-                # Either use special mode
-                'special_mode': 'simple', # Can be "none", "simple"
-                # Or specify load_path to load an existing model
-                # 'load_path': f"models/quat_model_{option}.json",
-                # Or specify training parameters
-                # 'save_path': f"models/quat_model_{option}.json",
-                # 'k_init': 10
-            }
-            # Alternatively, you could use a unified model:
-            # 'unified_model': {
-                # Specify load_path to load an existing model
-                # 'load_path': f"models/mlp_width128_depth3_pos_ang_vel_{option}.pt",
-                # Or provide training parameters if model doesn't exist yet
-            #     'width': 256,
-            #     'depth': 5,
-            #     'save_path': f"models/mlp_width256_depth5_pos_ang_vel_{option}.pt",
-            #     'batch_size': 100,
-            #     'device': "mps",  # Can be "cpu", "cuda", or "mps"
-            #     'lr_strategy': (1e-3, 1e-4, 1e-5),
-            #     'epoch_strategy': (50, 50, 50),
-            #     'length_strategy': (0.4, 0.7, 1),
-            #     'plot': True,
-            #     'print_every': 10
-            # }
-        }
+        # Create configuration objects for position and quaternion models
+        pos_config = PositionModelConfig(mode="none")
+        quat_config = QuaternionModelConfig(mode="simple")
+        
+        # Alternatively, you could use a unified model:
+        unified_config = UnifiedModelConfig(
+            mode="se3_lpvds",
+            k_init=1,
+            # width=256,
+            # depth=5,
+            # save_path=f"models/mlp_width256_depth5_pos_ang_vel_{option}.pt",
+            # batch_size=100,
+            # device="mps",
+            # lr_strategy=(1e-3, 1e-4, 1e-5),
+            # epoch_strategy=(50, 50, 50),
+            # length_strategy=(0.4, 0.7, 1),
+            # plot=True,
+            # print_every=10
+        )
 
         ds_policy = DSPolicy(
             x=x, 
@@ -350,7 +317,9 @@ if __name__ == "__main__":
             quat=q, 
             omega=omega, 
             gripper=gripper,
-            model_config=model_config,
+            # pos_config=pos_config,
+            # quat_config=quat_config,
+            unified_config=unified_config,
             dt=1/60, 
             switch=False, 
             demo_traj_probs=demo_traj_probs
@@ -368,14 +337,17 @@ if __name__ == "__main__":
         # Set the same random seed for quaternion initialization to ensure reproducibility
         # quat_rng = np.random.RandomState(seed=3)
         quat_rng = np.random.RandomState()
-        init_euler = R.random(random_state=quat_rng).as_euler("xyz", degrees=False)
+        # init_euler = R.random(random_state=quat_rng).as_euler("xyz", degrees=False) # Old Euler init
+        init_quat = R.random(random_state=quat_rng).as_quat() # New Quaternion init
+        init_pos = np.array([init_pos_x, init_pos_y, init_pos_z])
         init_state = np.concatenate(
-            [np.array([init_pos_x, init_pos_y, init_pos_z]), init_euler]
+            [init_pos, init_quat] # Create 7D state
         )
+        init_state = np.array([-0.2, -0.25, -0.3, 0.1, 0, 0, 0])
         
         simulator.simulate(
-            # np.concatenate([x[1][0], quat_to_euler(q[1][0])]),
-            init_state,
+            np.concatenate([x[0][0], q[0][0]]), # Old Euler example
+            # init_state, # Pass 7D state
             "ds_policy/data/test_ds_policy.npz",
             n_steps=300,
             clf=True,
@@ -386,7 +358,7 @@ if __name__ == "__main__":
     # Load and visualize the results
     data = np.load("ds_policy/data/test_ds_policy.npz", allow_pickle=True)
     demo_trajs = data["demo_trajs"]
-    traj = data["traj"]
+    traj = data["traj"] # Trajectory is N x 7
     ref_traj_indices = data["ref_traj_indices"]
     ref_point_indices = data["ref_point_indices"]
     animator = Animator(traj, demo_trajs, ref_traj_indices, ref_point_indices)

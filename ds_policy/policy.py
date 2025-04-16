@@ -1,4 +1,6 @@
 import os
+from dataclasses import dataclass, field
+from typing import Literal, Optional, Tuple, List, Union
 
 from .neural_ode.neural_ode import NeuralODE
 import numpy as np
@@ -10,7 +12,7 @@ import json
 from scipy.spatial.transform import Rotation as R
 
 from .neural_ode.train_neural_ode import train
-from .ds_utils import quat_mult, Quaternion, quat_to_euler, euler_to_quat
+from .ds_utils import quat_to_euler, euler_to_quat
 from .so3_lpvds.gmm_class import gmm_class
 from .so3_lpvds.quat_class import quat_class
 from .so3_lpvds.process_tools import (
@@ -19,7 +21,8 @@ from .so3_lpvds.process_tools import (
     extract_state,
     rollout_list,
 )
-
+from .se3_lpvds.src.se3_class import se3_class
+from .se3_lpvds.src.util import process_tools, plot_tools
 
 qp = OSQP()
 
@@ -27,6 +30,72 @@ qp = OSQP()
 @jax.jit
 def qp_solve(Q_opt, G_opt, h_opt):
     return qp.run(params_obj=(Q_opt, jnp.zeros(Q_opt.shape[0])), params_ineq=(G_opt, h_opt)).params
+
+
+# Configuration classes for DSPolicy
+@dataclass
+class PositionModelConfig:
+    """Configuration for position model."""
+    mode: Literal["none", "avg", "neural_ode"]
+    
+    # Neural ODE specific parameters
+    load_path: Optional[str] = None
+    width: int = 128
+    depth: int = 3
+    save_path: Optional[str] = None
+    batch_size: int = 100
+    device: str = "cpu"
+    lr_strategy: Tuple[float, float, float] = (1e-3, 1e-4, 1e-5)
+    epoch_strategy: Tuple[int, int, int] = (10, 10, 10)
+    length_strategy: Tuple[float, float, float] = (0.4, 0.7, 1)
+    plot: bool = True
+    print_every: int = 10
+    
+    def __post_init__(self):
+        if self.mode == "neural_ode" and self.load_path is None and self.save_path is None:
+            raise ValueError("For neural_ode mode, either load_path or save_path must be provided")
+
+
+@dataclass
+class QuaternionModelConfig:
+    """Configuration for quaternion model."""
+    mode: Literal["none", "simple", "so3_lpvds"]
+    
+    # SO3-LPVDS specific parameters
+    load_path: Optional[str] = None
+    save_path: Optional[str] = None
+    k_init: int = 10
+    
+    def __post_init__(self):
+        if self.mode == "so3_lpvds" and self.load_path is None and self.save_path is None:
+            raise ValueError("For so3_lpvds mode, either load_path or save_path must be provided")
+
+
+@dataclass
+class UnifiedModelConfig:
+    """Configuration for unified position and orientation model."""
+    mode: Literal["neural_ode", "se3_lpvds"]
+    
+    # Neural ODE specific parameters
+    load_path: Optional[str] = None
+    width: int = 256
+    depth: int = 5
+    save_path: Optional[str] = None
+    batch_size: int = 100
+    device: str = "cpu"
+    lr_strategy: Tuple[float, float, float] = (1e-3, 1e-4, 1e-5)
+    epoch_strategy: Tuple[int, int, int] = (50, 50, 50)
+    length_strategy: Tuple[float, float, float] = (0.4, 0.7, 1)
+    plot: bool = True
+    print_every: int = 10
+    
+    # SE3-LPVDS specific parameters (for future implementation)
+    # Add parameters as needed
+    k_init: int = 1
+    
+    # def __post_init__(self):
+    #     if self.load_path is None and self.save_path is None:
+    #         raise ValueError(f"For {self.mode} mode, either load_path or save_path must be provided")
 
 
 class DSPolicy:
@@ -46,7 +115,10 @@ class DSPolicy:
         _quat_data_preprocess: Preprocess the quaternion data for the SO3-LPVDS model
         _apply_clf: Apply the Control Lyapunov Function (CLF) constraints to the control action
         _choose_ref: Choose the reference trajectory and point based on the current position
-        _configure_models: Configure the models based on the provided configuration dictionary
+        _configure_models: Configure the models based on the provided configuration objects
+        _configure_pos_model: Configure the position model based on its configuration
+        _configure_quat_model: Configure the quaternion model based on its configuration
+        _configure_unified_model: Configure the unified model based on its configuration
         _validate_model_setup: Validate that the models are properly configured
     """
 
@@ -57,7 +129,9 @@ class DSPolicy:
         quat: list[np.ndarray],
         omega: list[np.ndarray],
         gripper: list[np.ndarray],
-        model_config: dict,
+        pos_config: Optional[PositionModelConfig] = None,
+        quat_config: Optional[QuaternionModelConfig] = None,
+        unified_config: Optional[UnifiedModelConfig] = None,
         dt: float = 0.01,
         switch: bool = False,
         lookahead: int = 5,
@@ -74,18 +148,9 @@ class DSPolicy:
             quat: List of quaternion trajectories from demonstrations
             omega: List of angular velocity trajectories from demonstrations
             gripper: List of gripper trajectories from demonstrations
-            model_config: Configuration dictionary for models with structure:
-                - unified_model (dict, optional): Configuration for unified position+orientation model
-                    - load_path (str, optional): Path to load pre-trained model
-                    - [training parameters if not loading]
-                - pos_model (dict, optional): Configuration for position-only model
-                    - special_mode (str, optional): "none", "avg"
-                    - load_path (str, optional): Path to load pre-trained model
-                    - [training parameters if not loading]
-                - quat_model (dict, optional): Configuration for orientation-only model
-                    - special_mode (str, optional): "none"
-                    - load_path (str, optional): Path to load pre-trained model
-                    - [training parameters if not loading]
+            pos_config: Configuration for position-only model
+            quat_config: Configuration for orientation-only model
+            unified_config: Configuration for unified position+orientation model
             dt: Time step for simulation and prediction
             switch: If True, allows switching between trajectories at runtime
             lookahead: Number of steps to lookahead for reference trajectory selection
@@ -93,6 +158,12 @@ class DSPolicy:
             backtrack_steps: Number of steps to backtrack on collision
             **kwargs: Additional keyword arguments
         """
+        # Validate configuration parameters
+        if unified_config is not None and (pos_config is not None or quat_config is not None):
+            raise ValueError("Cannot provide both unified_config and individual model configs")
+        if unified_config is None and (pos_config is None or quat_config is None):
+            raise ValueError("Must provide either unified_config or both pos_config and quat_config")
+        
         self.dt = dt
         self.x = x
         self.x_dot = x_dot
@@ -114,6 +185,13 @@ class DSPolicy:
         self.pos_model = None
         self.quat_model = None
         
+        # Initialize model flags
+        self.pos_none = False
+        self.pos_avg = False
+        self.quat_none = False
+        self.quat_simple = False
+        self.se3_lpvds = False
+        
         # Process data for quat model
         (
             self.p_in,
@@ -128,11 +206,8 @@ class DSPolicy:
             [np.concatenate([x[i], quat[i]], axis=-1) for i in range(len(x))]
         )
 
-        self.pos_none = False
-        self.pos_avg = False
-        self.quat_none = False
-        self.quat_simple = False
-        self._configure_models(model_config)
+        # Configure models
+        self._configure_models(pos_config, quat_config, unified_config)
         self._validate_model_setup()
 
     def get_action(
@@ -174,6 +249,13 @@ class DSPolicy:
             gripper_action = np.zeros(1)
             
             return np.concatenate([backtrack_vel_pos, backtrack_vel_ang, gripper_action])
+        
+        if self.se3_lpvds:
+            p_next, q_next, gamma, v, w = self.model.step(state[:3], R.from_quat(state[3:]), self.dt)
+            action_pos = v.flatten()
+            action_ang = w.flatten()
+            gripper_action = np.zeros(1)
+            return np.concatenate([action_pos, action_ang, gripper_action])
 
         # Original logic for forward action
         action_raw = self._get_action_raw(
@@ -461,6 +543,7 @@ class DSPolicy:
             save_path: Path to save the trained model
             k_init: Initial number of Gaussian components for the model
         """
+        q_rotations = [[R.from_quat(quat) for quat in quat_traj] for quat_traj in self.quat]
         quat_obj = quat_class(
             self.q_in,
             self.q_out,
@@ -789,36 +872,89 @@ class DSPolicy:
 
         return int(traj_idx), int(point_idx_lookahead), int(point_idx_no_lookahead)
 
-    def _configure_models(self, model_config):
+    def _configure_models(
+        self, 
+        pos_config: Optional[PositionModelConfig], 
+        quat_config: Optional[QuaternionModelConfig], 
+        unified_config: Optional[UnifiedModelConfig]
+    ):
         """
-        Configure models based on the provided configuration dictionary.
-        
-        Sets up the appropriate models for position and orientation control
-        based on the configuration provided during initialization.
+        Configure models based on the provided configuration objects.
         
         Args:
-            model_config: Dictionary containing model configurations
+            pos_config: Configuration for position model
+            quat_config: Configuration for quaternion model
+            unified_config: Configuration for unified model
         """
-        # Configure unified model if specified
-        if 'unified_model' in model_config:
-            unified_config = model_config['unified_model']
-            
-            # Check if loading pre-trained model
-            if 'load_path' in unified_config:
-                self.model = self._load_node(unified_config['load_path'], 7, 6)
+        if unified_config is not None:
+            self._configure_unified_model(unified_config)
+            return
+        
+        if pos_config is not None:
+            self._configure_pos_model(pos_config)
+        
+        if quat_config is not None:
+            self._configure_quat_model(quat_config)
+
+    def _configure_pos_model(self, config: PositionModelConfig):
+        """
+        Configure the position model based on its configuration.
+        
+        Args:
+            config: Position model configuration
+        """
+        if config.mode == "none":
+            self.pos_none = True
+        elif config.mode == "avg":
+            self.pos_avg = True
+        elif config.mode == "neural_ode":
+            if config.load_path is not None:
+                self.pos_model = self._load_node(config.load_path, 3, 3)
             else:
-                # Training configuration
-                width = unified_config.get('width', 128)
-                depth = unified_config.get('depth', 3)
-                save_path = unified_config.get('save_path', f'./models/unified_model_width{width}_depth{depth}.pt')
-                batch_size = unified_config.get('batch_size', 1)
-                device = unified_config.get('device', 'cpu')
-                lr_strategy = unified_config.get('lr_strategy', (1e-3, 1e-4, 1e-5))
-                epoch_strategy = unified_config.get('epoch_strategy', (100, 100, 100))
-                length_strategy = unified_config.get('length_strategy', (0.4, 0.7, 1))
-                plot = unified_config.get('plot', True)
-                print_every = unified_config.get('print_every', 100)
-                
+                self.pos_model = self._train_node(
+                    self.x,
+                    self.x_dot,
+                    config.save_path,
+                    device=config.device,
+                    batch_size=config.batch_size,
+                    lr_strategy=config.lr_strategy,
+                    epoch_strategy=config.epoch_strategy,
+                    length_strategy=config.length_strategy,
+                    plot=config.plot,
+                    print_every=config.print_every
+                )
+
+    def _configure_quat_model(self, config: QuaternionModelConfig):
+        """
+        Configure the quaternion model based on its configuration.
+        
+        Args:
+            config: Quaternion model configuration
+        """
+        if config.mode == "none":
+            self.quat_none = True
+        elif config.mode == "simple":
+            self.quat_simple = True
+        elif config.mode == "so3_lpvds":
+            if config.load_path is not None:
+                self._load_so3_lpvds(config.load_path)
+            else:
+                self._train_so3_lpvds(
+                    save_path=config.save_path,
+                    k_init=config.k_init
+                )
+
+    def _configure_unified_model(self, config: UnifiedModelConfig):
+        """
+        Configure the unified model based on its configuration.
+        
+        Args:
+            config: Unified model configuration
+        """
+        if config.mode == "neural_ode":
+            if config.load_path is not None:
+                self.model = self._load_node(config.load_path, 7, 6)
+            else:
                 # Create combined input and output data for unified model
                 input_data = [
                     np.concatenate([self.x[i], self.quat[i]], axis=-1)
@@ -832,76 +968,37 @@ class DSPolicy:
                 self.model = self._train_node(
                     input_data,
                     output_data,
-                    save_path,
-                    device=device,
-                    batch_size=batch_size,
-                    lr_strategy=lr_strategy,
-                    epoch_strategy=epoch_strategy,
-                    length_strategy=length_strategy,
-                    plot=plot,
-                    print_every=print_every
+                    config.save_path,
+                    device=config.device,
+                    batch_size=config.batch_size,
+                    lr_strategy=config.lr_strategy,
+                    epoch_strategy=config.epoch_strategy,
+                    length_strategy=config.length_strategy,
+                    plot=config.plot,
+                    print_every=config.print_every
                 )
-            return
-        
-        # Configure position model if specified
-        if 'pos_model' in model_config:
-            pos_config = model_config['pos_model']
-            # Check for use_avg mode
-            self.pos_none = pos_config.get('special_mode', None) == 'none'
-            self.pos_avg = pos_config.get('special_mode', None) == 'avg'
+        elif config.mode == "se3_lpvds":
+            self.se3_lpvds = True
+            p_raw = self.x
+            q_raw = [[R.from_quat(quat) for quat in quat_traj] for quat_traj in self.quat]
+            t_raw = [[j*self.dt for j in range(len(self.x[i]))] for i in range(len(self.x))]
+            p_in, q_in, t_in = process_tools.pre_process(p_raw, q_raw, t_raw, opt= "savgol")
+            p_init_list, q_init_list, p_att, q_att = process_tools.extract_state(p_in, q_in) # Capture lists
             
-            if not self.pos_none and not self.pos_avg:
-                if 'load_path' in pos_config:
-                    self.pos_model = self._load_node(pos_config['load_path'], 3, 3)
-                else:
-                    # Training configuration
-                    width = pos_config.get('width', 128)
-                    depth = pos_config.get('depth', 3)
-                    save_path = pos_config.get('save_path', f'./models/pos_model_width{width}_depth{depth}.pt')
-                    device = pos_config.get('device', 'cpu')
-                    batch_size = pos_config.get('batch_size', 1)
-                    lr_strategy = pos_config.get('lr_strategy', (1e-3, 1e-4, 1e-5))
-                    epoch_strategy = pos_config.get('epoch_strategy', (100, 100, 100))
-                    length_strategy = pos_config.get('length_strategy', (0.4, 0.7, 1))
-                    plot = pos_config.get('plot', True)
-                    print_every = pos_config.get('print_every', 100)
-                    
-                    self.pos_model = self._train_node(
-                        self.x,
-                        self.x_dot,
-                        save_path,
-                        device=device,
-                        batch_size=batch_size,
-                        lr_strategy=lr_strategy,
-                        epoch_strategy=epoch_strategy,
-                        length_strategy=length_strategy,
-                        plot=plot,
-                        print_every=print_every
-                    )
-        
-        # Configure quaternion model if specified
-        if 'quat_model' in model_config:
-            quat_config = model_config['quat_model']
-
-            self.quat_none = quat_config.get('special_mode', None) == 'none'
-            if self.quat_none:
-                return
-            self.quat_simple = quat_config.get('special_mode', None) == 'simple'
-            if self.quat_simple:
-                return
+            truncate_percent = 0.05
+            for i in range(len(p_in)):
+                # Calculate number of points to keep (95% of original)
+                keep_points = int((1 - truncate_percent) * len(p_in[i]))
+                # Truncate position data
+                p_in[i] = p_in[i][:keep_points]
+                # Truncate orientation data
+                q_in[i] = q_in[i][:keep_points]
             
-            # Check if loading pre-trained model
-            if 'load_path' in quat_config:
-                self._load_so3_lpvds(quat_config['load_path'])
-            else:
-                # Training configuration
-                save_path = quat_config.get('save_path', './models/quat_model.json')
-                k_init = quat_config.get('k_init', 10)
-                
-                self._train_so3_lpvds(
-                    save_path=save_path,
-                    k_init=k_init
-                )
+            p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
+            p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
+            self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, self.dt, K_init=config.k_init)
+            self.model.begin()
+            plot_tools.plot_gmm(p_in_roll, self.model.gmm)
 
     def _validate_model_setup(self):
         """
@@ -915,7 +1012,7 @@ class DSPolicy:
             return
         
         if not self.pos_none and not self.pos_avg and self.pos_model is None:
-            raise ValueError("Either set special_mode to 'none' or 'avg' or configure a position model")
+            raise ValueError("Either set pos_config.mode to 'none' or 'avg' or configure a position model")
         
         if not self.quat_none and not self.quat_simple and self.quat_model is None:
-            raise ValueError("Either set special_mode to 'none' or configure a quaternion model")
+            raise ValueError("Either set quat_config.mode to 'none' or 'simple' or configure a quaternion model")

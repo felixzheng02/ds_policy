@@ -195,6 +195,7 @@ ds_policy/**/*.py[cod]
 *.pkl
 *.npy
 *.npz
+*.json
 
 # Built documentation
 docs/build/
