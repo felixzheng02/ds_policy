@@ -18,11 +18,12 @@ def load_data(task: str, option: str, finger: bool = False, transform_to_object_
         elif option == "reach_behind_and_pull":
             seg_num_int = 2
     elif task == "PnPCounterToCab":
-        object_of_interest = "object"
         if option == "PnPCounterToCab_Pick_option":
             seg_num_int = 0
+            object_of_interest = "object"
         elif option == "PnPCounterToCab_Place_option":
             seg_num_int = 1
+            object_of_interest = "bottom"
     else:
         raise ValueError(f"Invalid option: {option}")
     input_path = os.path.join(
