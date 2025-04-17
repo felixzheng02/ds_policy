@@ -82,39 +82,16 @@ def load_data(task: str, option: str, finger: bool = False, transform_to_object_
 
         if transform_to_object_of_interest_frame:
             object_of_interest_rot = np.array([R.from_quat(q).as_matrix() for q in object_of_interest_quat])
-            # Save initial handle pose
-            object_of_interest_pos_init = object_of_interest_pos[0]
-            object_of_interest_rot_init = object_of_interest_rot[0]
 
-            # Compute relative position in world frame
-            rel_pos_world = eef_pos - object_of_interest_pos_init
-
-            # Transform relative positions to initial handle frame
-            pos_traj = np.zeros_like(rel_pos_world)
-
-            rot_traj = np.zeros_like(eef_rot)
-            for i in range(len(rel_pos_world)):
-                # Transform to initial handle frame
-                pos_traj[i] = object_of_interest_rot_init.T @ rel_pos_world[i]
-                rot_traj[i] = object_of_interest_rot_init.T @ eef_rot[i]
+            pos_traj, rot_traj = transform_frame(eef_pos, eef_rot, object_of_interest_pos, object_of_interest_rot)
         else:
             pos_traj = eef_pos
             rot_traj = eef_rot
 
-        # Convert rotation matrices to quaternions
+        dt = 1 / 60
         quat_traj_scipy = R.from_matrix(rot_traj)
         quat_traj = quat_traj_scipy.as_quat()
-        # Compute velocities
-        dt = 1 / 60
-        vel_traj = np.diff(pos_traj, axis=0) / dt
-        vel_traj = np.vstack([vel_traj, vel_traj[-1]])
-
-        # compute angular velocity
-        # do finite difference of quat_traj
-        ang_vel_traj = np.zeros((len(quat_traj_scipy), 3))
-        time_vec = np.arange(len(quat_traj_scipy)) * dt
-        rs = RS(time_vec, quat_traj_scipy)
-        ang_vel_traj = rs(time_vec, 1)
+        vel_traj, ang_vel_traj = compute_vel_traj(pos_traj, rot_traj, dt)
         # convert quat to euler angle plot derivative as arrows to make sure it is correct
         # plot euler_traj and ang_vel_traj_euler
         if debug_on:
@@ -175,9 +152,49 @@ def load_data(task: str, option: str, finger: bool = False, transform_to_object_
     return x, x_dot, quat_traj_all, ang_vel_traj_all, gripper_traj
 
 
-def quat_to_euler(quat):
-    return R.from_quat(quat).as_euler("xyz", degrees=False)
+def transform_frame(origin_pos: np.ndarray, origin_rot: np.ndarray, target_pos: np.ndarray, target_rot: np.ndarray):
+    """
+    Args:
+        origin_pos: np.ndarray, shape (N, 3)
+        origin_rot: np.ndarray, shape (N, 3, 3)
+        target_pos: np.ndarray, shape (N, 3)
+        target_rot: np.ndarray, shape (N, 3, 3)
+    Returns:
+        pos_traj: np.ndarray, shape (N, 3), transformed position
+        rot_traj: np.ndarray, shape (N, 3, 3), transformed rotation
+    """
+    rel_pos = origin_pos - target_pos
 
+    # Transform relative positions to initial handle frame
+    pos_traj = np.zeros_like(rel_pos)
 
-def euler_to_quat(euler):
-    return R.from_euler("xyz", euler, degrees=False).as_quat()
+    rot_traj = np.zeros_like(target_rot)
+    for i in range(len(rel_pos)):
+        # Transform to initial handle frame
+        pos_traj[i] = target_rot[i].T @ rel_pos[i]
+        rot_traj[i] = target_rot[i].T @ origin_rot[i]
+
+    return pos_traj, rot_traj
+
+def compute_vel_traj(pos_traj: np.ndarray, rot_traj: np.ndarray, dt: float):
+    """
+    Args:
+        pos_traj: np.ndarray, shape (N, 3)
+        rot_traj: np.ndarray, shape (N, 3, 3)
+        dt: float, time step
+    Returns:
+        translational_vel_traj: np.ndarray, shape (N, 3), translational velocity
+        angular_vel_traj: np.ndarray, shape (N, 3), angular velocity
+    """
+    quat_traj_scipy = R.from_matrix(rot_traj)
+    quat_traj = quat_traj_scipy.as_quat()
+
+    translational_vel_traj = np.diff(pos_traj, axis=0) / dt
+    translational_vel_traj = np.vstack([translational_vel_traj, translational_vel_traj[-1]])
+
+    ang_vel_traj = np.zeros((len(quat_traj_scipy), 3))
+    time_vec = np.arange(len(quat_traj_scipy)) * dt
+    rs = RS(time_vec, quat_traj_scipy)
+    ang_vel_traj = rs(time_vec, 1)
+
+    return translational_vel_traj, ang_vel_traj
