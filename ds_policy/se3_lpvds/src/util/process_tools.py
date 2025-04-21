@@ -112,7 +112,7 @@ def _smooth_pos(p_in:list, k=80):
     """
     p_smooth = []
     for l in range(len(p_in)):
-            p_smooth.append(savgol_filter(p_in[l], window_length=k, polyorder=2, axis=0, mode="nearest"))
+        p_smooth.append(savgol_filter(p_in[l], window_length=k, polyorder=2, axis=0, mode="nearest"))
     
     return p_smooth
 

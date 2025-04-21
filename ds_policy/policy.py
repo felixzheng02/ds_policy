@@ -76,7 +76,9 @@ class UnifiedModelConfig:
     """Configuration for unified position and orientation model."""
     mode: Literal["neural_ode", "se3_lpvds"]
     
+    # ================================================
     # Neural ODE specific parameters
+    # ================================================
     load_path: Optional[str] = None
     width: int = 256
     depth: int = 5
@@ -89,8 +91,9 @@ class UnifiedModelConfig:
     plot: bool = True
     print_every: int = 10
     
-    # SE3-LPVDS specific parameters (for future implementation)
-    # Add parameters as needed
+    # ================================================
+    # SE3-LPVDS specific parameters
+    # ================================================
     k_init: int = 1
     
     # PD control parameters (for SE3-LPVDS near target)
@@ -99,6 +102,9 @@ class UnifiedModelConfig:
     simple_ds_ori_threshold: float = 0.1
     K_pos: float = 1.0
     K_ori: float = 1.0
+
+    # Resampling parameters
+    attractor_resampling_mode: str = "random" # This determines how to resample the attractor. Could be "random", "nearest", "Gaussian"
     
     # def __post_init__(self):
     #     if self.load_path is None and self.save_path is None:
@@ -269,7 +275,6 @@ class DSPolicy:
             ori_angle = np.linalg.norm(q_err.as_rotvec())
 
             if self.enable_simple_ds_near_target and pos_dist < self.simple_ds_pos_threshold and ori_angle < self.simple_ds_ori_threshold:
-                print("Near target, using simple DS control")
                 # Use PD controller
                 p_error = p_att - p_curr
                 ori_error_vec = q_err.as_rotvec()
@@ -302,13 +307,48 @@ class DSPolicy:
         return np.concatenate([action, gripper_action])
     
     def resample(self, state: np.ndarray):
-        pass
+        if self.se3_lpvds:
+            self._resample_attractor()
+            self._modulate(state)
+        else:
+            self._update_demo_traj_probs(state, "ref_point", 0.8)
+        return
     
-    def update_demo_traj_probs(
+    def _resample_attractor(self):
+        """
+        Resample the attractor and adjust the policy accordingly
+
+        Args:
+            
+        """
+        pos_att, R_att = self.se3_lpvds_attractor_generator.sample()
+        pos_shifted, R_shifted = self._shift_trajs(pos_att, R_att)
+        self.train_se3_lpvds(pos_shifted, R_shifted, pos_att, R_att, self.dt, self.k_init, visualize=False)
+
+    def _shift_trajs(self, pos_att: np.ndarray, R_att: R):
+        pos_shifted = []
+        for l in range(len(self.x)):
+            p_diff = pos_att - self.x[l][-1, :]
+            pos_shifted.append(p_diff.reshape(1, -1) + self.x[l])
+
+        R_shifted = []
+        R_list = [R.from_quat(quat_arr) for quat_arr in self.quat]
+        for l in range(len(self.quat)):
+            R_diff = R_att * R_list[l][-1].inv()
+            R_shifted.append([R_diff * r for r in R_list[l]])
+
+        return pos_shifted, R_shifted
+
+    def _modulate(self, state: np.ndarray):
+        # TODO: Sam
+        pass
+        
+    def _update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
     ):
         """
         Reduce trajectory probabilities by a factor of penalty for trajectories that come close to the current position.
+        NOTE: this is not for se3_lpvds, which does not track the reference trajectory
         
         Args:
             state: Current state (x, y, z, qx, qy, qz, qw)
@@ -796,7 +836,7 @@ class DSPolicy:
             # Normalize quaternion error
             err = err.at[3:].set(err[3:]/jnp.linalg.norm(err[3:]))
             err_pos = cur_state[:3] - ref_state[:3]  # Position error
-            err_quat = quat_mult(ref_quat.flatten(), R.from_quat(cur_quat.flatten()).inv().as_quat()).reshape((-1,1)) # Quaternion error
+            err_quat = (R.from_quat(ref_quat) * R.from_quat(cur_quat).inv()).as_quat() # Quaternion error
             
             # Lyapunov function (quadratic in the error)
             V = jnp.sum(jnp.square(2*err))/4
@@ -1012,26 +1052,25 @@ class DSPolicy:
                 )
         elif config.mode == "se3_lpvds":
             self.se3_lpvds = True
-            p_raw = self.x
-            q_raw = [[R.from_quat(quat) for quat in quat_traj] for quat_traj in self.quat]
-            t_raw = [[j*self.dt for j in range(len(self.x[i]))] for i in range(len(self.x))]
-            p_in, q_in, t_in, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt= "savgol")
-            # p_init_list, q_init_list, p_att, q_att = process_tools.extract_state(p_in, q_in) # Capture lists
-            
+            p_raw = self.x # list of np.ndarray
+            q_raw = [[R.from_quat(quat) for quat in quat_traj] for quat_traj in self.quat] # list of list of Rotation
+
+            end_pts = [(p_traj[-1], q_traj[-1]) for p_traj, q_traj in zip(p_raw, q_raw)]
+            self.se3_lpvds_attractor_generator = self.SE3LVPDSAttractorGenerator(end_pts, mode=config.attractor_resampling_mode)
+            p_att, q_att = self.se3_lpvds_attractor_generator.sample()
+
+            p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
+            p_in = process_tools._smooth_pos(p_in)
+
+            # Truncate last part of the trajectories to avoid unstable dynamics
             truncate_percent = 0.05
             for i in range(len(p_in)):
-                # Calculate number of points to keep (95% of original)
                 keep_points = int((1 - truncate_percent) * len(p_in[i]))
-                # Truncate position data
                 p_in[i] = p_in[i][:keep_points]
-                # Truncate orientation data
                 q_in[i] = q_in[i][:keep_points]
             
-            p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
-            p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
-            self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, self.dt, K_init=config.k_init)
-            self.model.begin()
-            plot_tools.plot_gmm(p_in_roll, self.model.gmm)
+            self.k_init = config.k_init
+            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, self.k_init, visualize=True)
             
             # Store PD parameters from config
             self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
@@ -1040,6 +1079,15 @@ class DSPolicy:
                 self.simple_ds_ori_threshold = config.simple_ds_ori_threshold
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
+
+    def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_init, visualize=False):
+        t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
+        p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
+        p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
+        self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K_init)
+        self.model.begin()
+        if visualize:
+            plot_tools.plot_gmm(p_in_roll, self.model.gmm)
 
     def _validate_model_setup(self):
         """
@@ -1157,3 +1205,26 @@ class DSPolicy:
         else:
             plt.savefig(save_path)
         plt.close()
+
+    class SE3LVPDSAttractorGenerator:
+        def __init__(self, end_pts: list[tuple[np.ndarray, R]], mode: str):
+            """
+            Args:
+                end_pts: List of tuples (np.ndarray, Rotation)
+                mode: Mode of the attractor generator
+            """
+            self.end_pts = end_pts
+            self.mode = mode
+            if mode == "Gaussian":
+                pass
+                
+        def sample(self, state: Optional[np.ndarray] = None) -> tuple[np.ndarray, R]:
+            if self.mode == "random":
+                random_idx = np.random.randint(0, len(self.end_pts))
+                return self.end_pts[random_idx]
+            elif self.mode == "nearest":
+                pass
+            elif self.mode == "Gaussian":
+                pass
+            else:
+                raise ValueError(f"Invalid mode: {self.mode}")
