@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
-from typing import Literal, Optional, Tuple, List, Union
+from typing import Literal, Optional, Tuple, List, Union, Callable
+import matplotlib.pyplot as plt
 
 from .neural_ode.neural_ode import NeuralODE
 import numpy as np
@@ -91,6 +92,13 @@ class UnifiedModelConfig:
     # SE3-LPVDS specific parameters (for future implementation)
     # Add parameters as needed
     k_init: int = 1
+    
+    # PD control parameters (for SE3-LPVDS near target)
+    enable_simple_ds_near_target: bool = False
+    simple_ds_pos_threshold: float = 0.05
+    simple_ds_ori_threshold: float = 0.1
+    K_pos: float = 1.0
+    K_ori: float = 1.0
     
     # def __post_init__(self):
     #     if self.load_path is None and self.save_path is None:
@@ -250,11 +258,34 @@ class DSPolicy:
             return np.concatenate([backtrack_vel_pos, backtrack_vel_ang, gripper_action])
         
         if self.se3_lpvds:
-            p_next, q_next, gamma, v, w = self.model.step(state[:3], R.from_quat(state[3:]), self.dt)
-            action_pos = v.flatten()
-            action_ang = w.flatten()
-            gripper_action = np.zeros(1)
-            return np.concatenate([action_pos, action_ang, gripper_action])
+            # Check if near target and PD control is enabled
+            p_curr = state[:3]
+            q_curr = R.from_quat(state[3:])
+            p_att = self.model.p_att
+            q_att = self.model.q_att
+
+            pos_dist = np.linalg.norm(p_curr - p_att)
+            q_err = q_att * q_curr.inv()
+            ori_angle = np.linalg.norm(q_err.as_rotvec())
+
+            if self.enable_simple_ds_near_target and pos_dist < self.simple_ds_pos_threshold and ori_angle < self.simple_ds_ori_threshold:
+                print("Near target, using simple DS control")
+                # Use PD controller
+                p_error = p_att - p_curr
+                ori_error_vec = q_err.as_rotvec()
+                
+                action_pos = self.K_pos * p_error 
+                action_ang = self.K_ori * ori_error_vec
+                
+                gripper_action = np.zeros(1) # Assuming open/close is handled elsewhere when near target
+                return np.concatenate([action_pos, action_ang, gripper_action])
+            else:
+                # Use SE3-LPVDS model
+                p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
+                action_pos = v.flatten()
+                action_ang = w.flatten()
+                gripper_action = np.zeros(1)
+                return np.concatenate([action_pos, action_ang, gripper_action])
 
         # Original logic for forward action
         action_raw = self._get_action_raw(
@@ -269,6 +300,9 @@ class DSPolicy:
         else:
             gripper_action = np.zeros(1)
         return np.concatenate([action, gripper_action])
+    
+    def resample(self, state: np.ndarray):
+        pass
     
     def update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
@@ -981,8 +1015,8 @@ class DSPolicy:
             p_raw = self.x
             q_raw = [[R.from_quat(quat) for quat in quat_traj] for quat_traj in self.quat]
             t_raw = [[j*self.dt for j in range(len(self.x[i]))] for i in range(len(self.x))]
-            p_in, q_in, t_in = process_tools.pre_process(p_raw, q_raw, t_raw, opt= "savgol")
-            p_init_list, q_init_list, p_att, q_att = process_tools.extract_state(p_in, q_in) # Capture lists
+            p_in, q_in, t_in, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt= "savgol")
+            # p_init_list, q_init_list, p_att, q_att = process_tools.extract_state(p_in, q_in) # Capture lists
             
             truncate_percent = 0.05
             for i in range(len(p_in)):
@@ -998,6 +1032,14 @@ class DSPolicy:
             self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, self.dt, K_init=config.k_init)
             self.model.begin()
             plot_tools.plot_gmm(p_in_roll, self.model.gmm)
+            
+            # Store PD parameters from config
+            self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
+            if self.enable_simple_ds_near_target:  
+                self.simple_ds_pos_threshold = config.simple_ds_pos_threshold
+                self.simple_ds_ori_threshold = config.simple_ds_ori_threshold
+                self.K_pos = config.K_pos
+                self.K_ori = config.K_ori
 
     def _validate_model_setup(self):
         """
@@ -1015,3 +1057,103 @@ class DSPolicy:
         
         if not self.quat_none and not self.quat_simple and self.quat_model is None:
             raise ValueError("Either set quat_config.mode to 'none' or 'simple' or configure a quaternion model")
+        
+    def plot_position_vector_field(
+        self,
+        save_path: str = None,
+    ):
+        """
+        Visualize the vector field of the trained model along with training data.
+        """
+        pos_to_vel = lambda x: self.get_action(x)[:3]
+        demo_trajs_flat = np.concatenate(self.x, axis=0)
+
+        x_min, x_max = demo_trajs_flat[:, 0].min(), demo_trajs_flat[:, 0].max()
+        y_min, y_max = demo_trajs_flat[:, 1].min(), demo_trajs_flat[:, 1].max()
+        z_min, z_max = demo_trajs_flat[:, 2].min(), demo_trajs_flat[:, 2].max()
+
+        padding = 0.1  # 10% padding
+        x_range = demo_trajs_flat[:, 0].max() - demo_trajs_flat[:, 0].min()
+        y_range = demo_trajs_flat[:, 1].max() - demo_trajs_flat[:, 1].min()
+        z_range = demo_trajs_flat[:, 2].max() - demo_trajs_flat[:, 2].min()
+        x_min, x_max = (
+            demo_trajs_flat[:, 0].min() - padding * x_range,
+            demo_trajs_flat[:, 0].max() + padding * x_range,
+        )
+        y_min, y_max = (
+            demo_trajs_flat[:, 1].min() - padding * y_range,
+            demo_trajs_flat[:, 1].max() + padding * y_range,
+        )
+        z_min, z_max = (
+            demo_trajs_flat[:, 2].min() - padding * z_range,
+            demo_trajs_flat[:, 2].max() + padding * z_range,
+        )
+
+        # Create grid points
+        grid_points = 10
+        x_grid = torch.linspace(x_min, x_max, grid_points)
+        y_grid = torch.linspace(y_min, y_max, grid_points)
+        z_grid = torch.linspace(z_min, z_max, grid_points)
+
+        X, Y, Z = torch.meshgrid(x_grid, y_grid, z_grid, indexing="ij")
+
+        X_np = X.numpy()
+        Y_np = Y.numpy()
+        Z_np = Z.numpy()
+
+        # Evaluate vector field at each point
+        U = np.zeros_like(X_np)
+        V = np.zeros_like(Y_np)
+        W = np.zeros_like(Z_np)
+
+        for i in range(grid_points):
+            for j in range(grid_points):
+                for k in range(grid_points):
+                    pos = np.array(
+                        [X_np[i, j, k], Y_np[i, j, k], Z_np[i, j, k]]
+                    )
+                    quat = np.array(
+                        [0, 0, 0, 1]
+                    )
+                    vel = pos_to_vel(np.concatenate([pos, quat]))
+                    U[i, j, k] = vel[0]
+                    V[i, j, k] = vel[1]
+                    W[i, j, k] = vel[2]
+
+        fig = plt.figure(figsize=(12, 12))
+        ax = fig.add_subplot(111, projection="3d")
+
+        stride = 1
+        ax.quiver(
+            X_np[::stride, ::stride, ::stride],
+            Y_np[::stride, ::stride, ::stride],
+            Z_np[::stride, ::stride, ::stride],
+            U[::stride, ::stride, ::stride],
+            V[::stride, ::stride, ::stride],
+            W[::stride, ::stride, ::stride],
+            length=0.03,
+            normalize=True,
+            color="red",
+            alpha=0.3,
+        )
+
+        for traj in self.x:
+            ax.plot3D(
+                traj[:, 0],
+                traj[:, 1],
+                traj[:, 2],
+                "b-",
+                linewidth=1,
+            )
+
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("Z")
+        ax.set_title("Vector Field and Training Trajectories")
+        ax.legend()
+
+        if save_path is None:
+            plt.show()
+        else:
+            plt.savefig(save_path)
+        plt.close()

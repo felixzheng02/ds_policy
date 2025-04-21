@@ -63,7 +63,7 @@ def _shift_pos(p_list):
 
         p_shifted.append(p_diff.reshape(1, -1) + p_list[l])
 
-    return p_shifted, p_att_mean
+    return p_shifted, p_att_mean, p_att_list
 
 
 def _shift_ori(q_list):
@@ -96,7 +96,7 @@ def _shift_ori(q_list):
 
         q_shifted.append([q_diff * q for q in q_list[l]])
 
-    return q_shifted, q_shifted[-1][-1]
+    return q_shifted, q_shifted[-1][-1], q_att_list
 
 
 def _smooth_pos(p_in:list, k=80):
@@ -239,15 +239,17 @@ def pre_process(p_raw, q_raw, t_raw, opt="savgol"):
         t_raw: Time stamps
     """
 
-    p_in, p_att             = _shift_pos(p_raw)
-    q_in, q_att             = _shift_ori(q_raw)
+    p_in, p_att, p_att_list = _shift_pos(p_raw)
+    q_in, q_att, q_att_list = _shift_ori(q_raw)
+
+    end_pose_list = [[p_att_list[i], q_att_list[i]] for i in range(len(p_att_list))]
 
     p_in                    = _smooth_pos(p_in)
     # q_in                    = _smooth_ori(q_in, q_att, opt) # needed or not?
 
     # p_in, q_in, t_in        = _filter(p_in, q_in, t_raw)  # needed or not?
 
-    return p_in, q_in, t_raw
+    return p_in, q_in, t_raw, p_att, q_att
 
 
 def compute_output(p_list, q_list, t_list):
@@ -325,7 +327,7 @@ def extract_state(p_list, q_list):
     p_att = p_list[0][-1, :]
     q_att = q_list[0][-1]
 
-    return p_init, q_init, p_att, q_att
+    return p_init, q_init
 
 
 def rollout_list(p_in, q_in, p_out, q_out):

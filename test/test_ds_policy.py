@@ -299,6 +299,11 @@ if __name__ == "__main__":
         unified_config = UnifiedModelConfig(
             mode="se3_lpvds",
             k_init=1,
+            enable_simple_ds_near_target=True,
+            simple_ds_pos_threshold=0.1,
+            simple_ds_ori_threshold=0.5,
+            K_pos=10.0,
+            K_ori=10.0,
             # width=256,
             # depth=5,
             # save_path=f"models/mlp_width256_depth5_pos_ang_vel_{option}.pt",
