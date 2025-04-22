@@ -287,6 +287,7 @@ class DSPolicy:
             else:
                 # Use SE3-LPVDS model
                 p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
+                # TODO: apply modulations
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -340,7 +341,12 @@ class DSPolicy:
         return pos_shifted, R_shifted
 
     def _modulate(self, state: np.ndarray):
-        # TODO: Sam
+        """
+        Args:
+            state: Current state (x, y, z, qx, qy, qz, qw)
+        """
+        # TODO: Sample a modulation from the modulations list
+        self.modulations.append()
         pass
         
     def _update_demo_traj_probs(
@@ -1079,6 +1085,8 @@ class DSPolicy:
                 self.simple_ds_ori_threshold = config.simple_ds_ori_threshold
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
+
+            self.modulations = []
 
     def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_init, visualize=False):
         t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
