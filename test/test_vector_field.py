@@ -121,5 +121,6 @@ if __name__ == "__main__":
         k_init=3
     )
     ds_policy = DSPolicy(x, x_dot, quat, omega, gripper, unified_config=unified_config, dt=1/60, switch=False, lookahead=5)
+    ds_policy._add_modulation_point([0, 0, 0, 0, 0, 0, 1])
     pos_to_vel = lambda x: ds_policy.get_action(x)[:3]
     plot_position_vector_field(pos_to_vel, x)

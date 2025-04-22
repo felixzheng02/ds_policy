@@ -289,8 +289,7 @@ class DSPolicy:
                 p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
                 # TODO: apply modulations
                 for obj_center in self.modulation_points:
-                    M = self.spherical_normal_modulation(p_curr, obj_center, 0.05)
-                    v = M @ v
+                    v = self.spherical_normal_modulation(p_curr, obj_center, 0.2, v)
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -459,10 +458,18 @@ class DSPolicy:
 
         return D, E, M
 
-    def spherical_normal_modulation(self, points: np.ndarray, object_center: np.ndarray, radius: float):
+    def spherical_normal_modulation(self, points: np.ndarray, object_center: np.ndarray, radius: float, v: np.ndarray) -> np.ndarray:
         gamma, gradient_gamma = self.gamma_spherical(points, object_center, radius)
         D, E, M = self.normal_modulation(gamma, gradient_gamma)
-        return M
+        # Apply modulation to velocity
+        if gamma >= 1:
+            v_modulated = M @ v
+        else:
+            repulsion_gain = 1.0
+            repulsive_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
+            xd_rep = repulsion_gain * repulsive_dir
+            v_modulated = xd_rep
+        return v_modulated
 
     def _add_modulation_point(self, state: np.ndarray):
         """
