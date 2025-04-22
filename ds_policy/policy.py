@@ -13,7 +13,6 @@ import json
 from scipy.spatial.transform import Rotation as R
 
 from .neural_ode.train_neural_ode import train
-from .so3_lpvds.gmm_class import gmm_class
 from .so3_lpvds.quat_class import quat_class
 from .so3_lpvds.process_tools import (
     pre_process,
@@ -22,6 +21,7 @@ from .so3_lpvds.process_tools import (
     rollout_list,
 )
 from .se3_lpvds.src.se3_class import se3_class
+from .se3_lpvds.src.gmm_class import gmm_class
 from .se3_lpvds.src.util import process_tools, plot_tools
 
 qp = OSQP()
@@ -1070,7 +1070,7 @@ class DSPolicy:
                 q_in[i] = q_in[i][:keep_points]
             
             self.k_init = config.k_init
-            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, self.k_init, visualize=True)
+            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, self.k_init, visualize=False)
             
             # Store PD parameters from config
             self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
@@ -1216,7 +1216,9 @@ class DSPolicy:
             self.end_pts = end_pts
             self.mode = mode
             if mode == "Gaussian":
-                pass
+                R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
+                self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
+                self.gaussian.fit()
                 
         def sample(self, state: Optional[np.ndarray] = None) -> tuple[np.ndarray, R]:
             if self.mode == "random":
@@ -1225,6 +1227,7 @@ class DSPolicy:
             elif self.mode == "nearest":
                 pass
             elif self.mode == "Gaussian":
-                pass
+                p, q = self.gaussian.sample()
+                return (p, R.from_quat(q))
             else:
                 raise ValueError(f"Invalid mode: {self.mode}")

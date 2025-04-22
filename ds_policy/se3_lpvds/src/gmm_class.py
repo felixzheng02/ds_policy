@@ -131,8 +131,8 @@ class gmm_class:
                         for the primary Gaussian components (excluding duals).
         """
 
-        gmm = BayesianGaussianMixture(n_components=self.K_init, n_init=1, random_state=2).fit(self.pq_in)
-        assignment_arr = gmm.predict(self.pq_in)
+        self.gmm = BayesianGaussianMixture(n_components=self.K_init, n_init=1, random_state=2).fit(self.pq_in)
+        assignment_arr = self.gmm.predict(self.pq_in)
 
         self._rearrange_array(assignment_arr)
         self._extract_gaussian()
@@ -142,6 +142,12 @@ class gmm_class:
         return dual_gamma[:self.K, :] # K by M; always remain the first half
     
 
+    def sample(self):
+        pq = self.gmm.sample(n_samples=1)[0].flatten()
+        p = pq[:3]
+        q = pq[3:]
+        q = riem_exp(self.q_att, np.expand_dims(q, axis=0))
+        return p, q.flatten()
 
 
 
