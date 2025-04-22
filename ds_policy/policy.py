@@ -176,7 +176,7 @@ class DSPolicy:
             raise ValueError("Cannot provide both unified_config and individual model configs")
         if unified_config is None and (pos_config is None or quat_config is None):
             raise ValueError("Must provide either unified_config or both pos_config and quat_config")
-        
+
         self.dt = dt
         self.x = x
         self.x_dot = x_dot
@@ -197,14 +197,14 @@ class DSPolicy:
         self.model = None  # unified model
         self.pos_model = None
         self.quat_model = None
-        
+
         # Initialize model flags
         self.pos_none = False
         self.pos_avg = False
         self.quat_none = False
         self.quat_simple = False
         self.se3_lpvds = False
-        
+
         # Process data for quat model
         (
             self.p_in,
@@ -258,11 +258,11 @@ class DSPolicy:
             # Use the negative demonstrated velocity at the reference point
             backtrack_vel_pos = -self.x_dot[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
             backtrack_vel_ang = -self.omega[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
-            
+
             gripper_action = np.zeros(1)
-            
+
             return np.concatenate([backtrack_vel_pos, backtrack_vel_ang, gripper_action])
-        
+
         if self.se3_lpvds:
             # Check if near target and PD control is enabled
             p_curr = state[:3]
@@ -278,16 +278,19 @@ class DSPolicy:
                 # Use PD controller
                 p_error = p_att - p_curr
                 ori_error_vec = q_err.as_rotvec()
-                
+
                 action_pos = self.K_pos * p_error 
                 action_ang = self.K_ori * ori_error_vec
-                
+
                 gripper_action = np.zeros(1) # Assuming open/close is handled elsewhere when near target
                 return np.concatenate([action_pos, action_ang, gripper_action])
             else:
                 # Use SE3-LPVDS model
                 p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
                 # TODO: apply modulations
+                for obj_center in self.modulation_points:
+                    M = self.spherical_normal_modulation(p_curr, obj_center, 0.05)
+                    v = M @ v
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -306,15 +309,15 @@ class DSPolicy:
         else:
             gripper_action = np.zeros(1)
         return np.concatenate([action, gripper_action])
-    
+
     def resample(self, state: np.ndarray):
         if self.se3_lpvds:
             self._resample_attractor()
-            self._modulate(state)
+            self._add_modulation_point(state)
         else:
             self._update_demo_traj_probs(state, "ref_point", 0.8)
         return
-    
+
     def _resample_attractor(self):
         """
         Resample the attractor and adjust the policy accordingly
@@ -340,15 +343,135 @@ class DSPolicy:
 
         return pos_shifted, R_shifted
 
-    def _modulate(self, state: np.ndarray):
+    def gamma_spherical(self, point: np.ndarray, object_center: np.ndarray, radius: float) -> tuple[float, np.ndarray]:
+        """
+        Calculates the gamma function and its gradient for a spherical obstacle in 3D.
+
+        Args:
+            point: A 3-element numpy array representing the point [x, y, z].
+            object_center: A 3-element numpy array representing the center [cx, cy, cz] of the sphere.
+            radius: The radius of the sphere.
+
+        Returns:
+            A tuple containing:
+                - gamma (float): The value of the gamma function Γ(point) = ||point - center||² - radius² + 1.
+                - gradient_gamma (np.ndarray): A 3-element numpy array representing the gradient ∇Γ(point) = [2dx, 2dy, 2dz].
+        """
+        # Ensure inputs are numpy arrays
+        point = np.asarray(point)
+        object_center = np.asarray(object_center)
+
+        # Compute displacement vector from obstacle center
+        displacement = point - object_center
+        dx, dy, dz = displacement[0], displacement[1], displacement[2]
+
+        # Squared distance from point to obstacle center
+        dist_sq = dx**2 + dy**2 + dz**2
+
+        # Gamma function: Γ(point) = ||point - center||² - radius² + 1
+        gamma = dist_sq - radius**2 + 1
+
+        # Gradient of Γ(point): ∇Γ(point) = 2 * displacement = [2dx, 2dy, 2dz]
+        gradient_gamma = 2 * displacement
+
+        return gamma, gradient_gamma
+
+    def normal_modulation(self, gamma: float, gradient_gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Calculates the modulation matrix for obstacle avoidance in 3D using the normal vector.
+
+        Args:
+            gamma: Scalar value of the boundary function Γ(x).
+            gradient_gamma: 3D vector representing the gradient ∇Γ(x).
+
+        Returns:
+            A tuple containing:
+                - D (np.ndarray): 3x3 diagonal matrix of eigenvalues.
+                - E (np.ndarray): 3x3 matrix representing the eigenbasis.
+                - M (np.ndarray): 3x3 modulation matrix.
+        """
+        # Ensure gradient is a numpy array
+        gradient_gamma = np.asarray(gradient_gamma)
+
+        # Initialize outputs to identity matrices (fallback for zero gradient)
+        D = np.eye(3)
+        E = np.eye(3)
+        M = np.eye(3)
+
+        # Calculate the norm of the gradient
+        grad_norm = np.linalg.norm(gradient_gamma)
+
+        # Avoid division by zero if gradient is zero
+        if grad_norm < 1e-8:
+            # If gradient is zero, no modulation is applied (return identity matrices)
+            # This might happen far from the obstacle or exactly at the center
+            return D, E, M
+
+        # Normalize the gradient to get the normal vector 'n'
+        n = gradient_gamma / grad_norm
+
+        # Construct the eigenbasis E = [n, e1, e2]
+        # Find a vector 't' not parallel to 'n'
+        if abs(n[0]) < 0.9:  # If n is not aligned with x-axis
+            t = np.array([1.0, 0.0, 0.0])
+        else: # If n is aligned or nearly aligned with x-axis, use y-axis
+            t = np.array([0.0, 1.0, 0.0])
+
+        # Create the first tangent vector e1 using cross product and normalize
+        e1 = np.cross(n, t)
+        e1_norm = np.linalg.norm(e1)
+        if e1_norm < 1e-8: # Should not happen if t is chosen correctly
+            # Fallback if cross product is zero (n and t were parallel)
+            # This case is unlikely with the above check for t
+            # We can try another axis like [0, 0, 1] or just return identity
+            t = np.array([0.0, 0.0, 1.0])
+            e1 = np.cross(n, t)
+            e1_norm = np.linalg.norm(e1)
+            if e1_norm < 1e-8: return D, E, M # Final fallback
+        e1 = e1 / e1_norm
+
+        # Create the second tangent vector e2 using cross product (already normalized)
+        e2 = np.cross(n, e1)
+        # Optional check: np.linalg.norm(e2) should be close to 1
+
+        # Eigenbasis matrix E (columns are n, e1, e2)
+        E = np.column_stack((n, e1, e2))
+
+        # Calculate eigenvalues
+        # Avoid division by zero or very large values if gamma is close to zero
+        if abs(gamma) < 1e-8:
+            # Handle case where gamma is very small (deep inside obstacle)
+            # Option 1: Set large modulation (e.g., project velocity onto tangent plane)
+            lambda_n = -1000.0 # Large negative value to strongly repel
+            lambda_e = 1.0     # Allow tangential motion
+            # Option 2: Return identity (less aggressive)
+            # return np.eye(3), np.eye(3), np.eye(3)
+        else:
+            lambda_n = 1.0 - 1.0 / gamma  # Eigenvalue for normal direction
+            lambda_e = 1.0 + 1.0 / gamma  # Eigenvalue for tangential directions
+
+        # Eigenvalue matrix D
+        D = np.diag([lambda_n, lambda_e, lambda_e])
+
+        # Modulation matrix M = E * D * E^T
+        # Since E is orthogonal (orthonormal columns), E^T = E^-1
+        M = E @ D @ E.T
+
+        return D, E, M
+
+    def spherical_normal_modulation(self, points: np.ndarray, object_center: np.ndarray, radius: float):
+        gamma, gradient_gamma = self.gamma_spherical(points, object_center, radius)
+        D, E, M = self.normal_modulation(gamma, gradient_gamma)
+        return M
+
+    def _add_modulation_point(self, state: np.ndarray):
         """
         Args:
             state: Current state (x, y, z, qx, qy, qz, qw)
         """
         # TODO: Sample a modulation from the modulations list
-        self.modulations.append()
-        pass
-        
+        self.modulation_points.append(state[:3])
+
     def _update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
     ):
@@ -388,43 +511,43 @@ class DSPolicy:
             current_traj_idx = self.ref_traj_idx
             if current_traj_idx is None:
                 return
-            
+
             current_traj = self.x[current_traj_idx]
-            
+
             # Compute Hausdorff distances between current trajectory and all other trajectories
             for i in range(len(self.x)):
                 if i == current_traj_idx:
                     continue  # Skip the current trajectory
-                
+
                 # Compute the pairwise distances between points in current_traj and other trajectory
                 # For each point in current_traj, find its distance to each point in other trajectory
                 # Shape: (len(current_traj), len(other_traj))
                 other_traj = self.x[i]
-                
+
                 # Reshape for broadcasting: (n_points_A, 1, 3) - (1, n_points_B, 3)
                 pairwise_distances = np.sqrt(np.sum(
                     (current_traj[:, np.newaxis, :] - other_traj[np.newaxis, :, :]) ** 2, 
                     axis=2
                 ))
-                
+
                 # Directed Hausdorff h(A,B): max_{a in A} min_{b in B} d(a,b)
                 h_AB = np.max(np.min(pairwise_distances, axis=1))
-                
+
                 # Directed Hausdorff h(B,A): max_{b in B} min_{a in A} d(b,a)
                 h_BA = np.max(np.min(pairwise_distances, axis=0))
-                
+
                 # Hausdorff distance is the maximum of h(A,B) and h(B,A)
                 hausdorff_dist = max(h_AB, h_BA)
-                
+
                 # If the Hausdorff distance is below the threshold, reduce the probability
                 if hausdorff_dist < traj_threshold:  # radius parameter is used as threshold
                     self.demo_traj_probs[i] *= penalty
         else:
             raise ValueError(f"Invalid mode: {mode}")
-        
+
         # NOTE: this always penalizes the currently followed trajectory, forces it to at least switch to some other close trajectory
         self.demo_traj_probs[self.ref_traj_idx] *= penalty
-        
+
         # Normalize the probabilities to keep the highest probability at 1
         if len(self.demo_traj_probs) > 0:
             max_prob = np.max(self.demo_traj_probs)
@@ -459,7 +582,7 @@ class DSPolicy:
         depth_str = model_name.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
-        
+
         model = NeuralODE(input_dim, output_dim, width_size, depth)
         model.load_state_dict(torch.load(model_path, weights_only=True))
         model.to('cpu')
@@ -502,7 +625,7 @@ class DSPolicy:
         depth_str = save_path.split("depth")[1].split("_")[0]
         width_size = int(width_str)
         depth = int(depth_str)
-        
+
         model = train(
             input_data,
             output_data,
@@ -519,7 +642,7 @@ class DSPolicy:
         )
         model.to('cpu')
         model.eval()
-        
+
         return model
 
     def _get_action_raw(self, state: np.ndarray):
@@ -540,29 +663,29 @@ class DSPolicy:
         if self.model is not None:
             with torch.no_grad():
                 return self.model.forward(state).numpy()
-            
+
         if self.pos_none:
             action_pos = np.zeros(3)
         elif self.pos_avg:
             # Find all points from self.x whose distance is close to current state
             x_curr = state[:3]
             close_points_velocities = []
-            
+
             # Define a distance threshold for "close" points
             distance_threshold = 0.1  # This can be adjusted as needed
-            
+
             # Iterate through each trajectory
             for traj_idx, traj in enumerate(self.x):
                 # Calculate distances from current state to each point in trajectory
                 distances = np.sqrt(np.sum((traj - x_curr) ** 2, axis=1))
-                
+
                 # Find indices of close points
                 close_indices = np.where(distances < distance_threshold)[0]
-                
+
                 # Add corresponding velocities to our collection
                 for idx in close_indices:
                     close_points_velocities.append(self.x_dot[traj_idx][idx])
-            
+
             # If no close points found, use the model directly
             if len(close_points_velocities) == 0:
                 action_pos = np.zeros(3)
@@ -574,7 +697,7 @@ class DSPolicy:
                 action_pos = self.pos_model.forward(state[:3]).numpy()
         else:
             raise ValueError("Cannot get position action")
-        
+
         if self.quat_none:
             action_ang = np.zeros(3)
         elif self.quat_simple: # NOTE: this implements a PD controller for the orientation error
@@ -596,7 +719,7 @@ class DSPolicy:
                 action_ang = self.quat_model._step(R.from_quat(state[3:]), self.dt)[2]
         else:
             raise ValueError("Cannot get orientation action")
-            
+
         return np.concatenate([action_pos, action_ang])
 
     def _compute_vel(self, x: np.ndarray):
@@ -836,14 +959,14 @@ class DSPolicy:
 
             # Construct the cost matrix for the QP
             Q_opt = jnp.vstack((jnp.hstack((scale_p*jnp.eye(3), jnp.zeros((3,3)))), jnp.hstack((jnp.zeros((3,3)), scale_q*jnp.eye(3)))))
-            
+
             # Compute error between current and reference state
             err = cur_state - ref_state
             # Normalize quaternion error
             err = err.at[3:].set(err[3:]/jnp.linalg.norm(err[3:]))
             err_pos = cur_state[:3] - ref_state[:3]  # Position error
             err_quat = (R.from_quat(ref_quat) * R.from_quat(cur_quat).inv()).as_quat() # Quaternion error
-            
+
             # Lyapunov function (quadratic in the error)
             V = jnp.sum(jnp.square(2*err))/4
 
@@ -933,7 +1056,7 @@ class DSPolicy:
                 traj_idx = np.random.choice(max_indices)
             else:
                 traj_idx = max_indices[0]
-            
+
             # Get the corresponding closest point index for the selected trajectory
             point_idx = closest_indices[traj_idx]
         else:  # stick to the current trajectory
@@ -968,10 +1091,10 @@ class DSPolicy:
         if unified_config is not None:
             self._configure_unified_model(unified_config)
             return
-        
+
         if pos_config is not None:
             self._configure_pos_model(pos_config)
-        
+
         if quat_config is not None:
             self._configure_quat_model(quat_config)
 
@@ -1043,7 +1166,7 @@ class DSPolicy:
                     np.concatenate([self.x_dot[i], self.omega[i]], axis=-1)
                     for i in range(len(self.x_dot))
                 ]
-                
+
                 self.model = self._train_node(
                     input_data,
                     output_data,
@@ -1074,10 +1197,10 @@ class DSPolicy:
                 keep_points = int((1 - truncate_percent) * len(p_in[i]))
                 p_in[i] = p_in[i][:keep_points]
                 q_in[i] = q_in[i][:keep_points]
-            
+
             self.k_init = config.k_init
             self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, self.k_init, visualize=False)
-            
+
             # Store PD parameters from config
             self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
             if self.enable_simple_ds_near_target:  
@@ -1086,7 +1209,7 @@ class DSPolicy:
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
 
-            self.modulations = []
+            self.modulation_points = []
 
     def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_init, visualize=False):
         t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
@@ -1107,13 +1230,13 @@ class DSPolicy:
         if self.model is not None:
             # Unified model is configured, no need for separate models
             return
-        
+
         if not self.pos_none and not self.pos_avg and self.pos_model is None:
             raise ValueError("Either set pos_config.mode to 'none' or 'avg' or configure a position model")
-        
+
         if not self.quat_none and not self.quat_simple and self.quat_model is None:
             raise ValueError("Either set quat_config.mode to 'none' or 'simple' or configure a quaternion model")
-        
+
     def plot_position_vector_field(
         self,
         save_path: str = None,
@@ -1227,7 +1350,7 @@ class DSPolicy:
                 R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
                 self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
                 self.gaussian.fit()
-                
+
         def sample(self, state: Optional[np.ndarray] = None) -> tuple[np.ndarray, R]:
             if self.mode == "random":
                 random_idx = np.random.randint(0, len(self.end_pts))
