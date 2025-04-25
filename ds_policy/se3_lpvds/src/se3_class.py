@@ -287,23 +287,14 @@ class se3_class:
         else:
             write_json(json_output, os.path.join(args[0], '1.json'))
 
-    def reconstruction_error(self):
-        """ Computes the reconstruction error of the learned SE(3) LPV-DS model.
-
-        Calculates the mean squared error between the original output data
-        (p_out, q_out) and the reconstructed output using the learned model.
-
-        Returns:
-            float: Mean squared error between the original and reconstructed output.
-        """
-        
-        for i in range(len(self.p_in)):
+    def compute_reconstruction_error(self):
+        error = 0
+        total_pts = self.p_in.shape[0]
+        for i in range(total_pts):
             p_in = self.p_in[i]
             q_in = self.q_in[i]
             p_out = self.p_out[i]
             q_out = self.q_out[i]
-            p_next, q_next, _, v, w = self.step(p_in, q_in, self.dt)
-            p_out_reconstructed = p_next
-            q_out_reconstructed = q_next
-            error += np.linalg.norm(p_out - p_out_reconstructed) + np.linalg.norm(q_out - q_out_reconstructed)
-        return error / len(self.p_in)
+            p_dot_pred, q_dot_pred, gamma, v, w = self.step(p_in, q_in, 1)
+            error += np.linalg.norm(p_out - p_dot_pred) + np.rad2deg(np.linalg.norm(quat_tools.riem_log(q_out, q_dot_pred)))
+        return error / total_pts

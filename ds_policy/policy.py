@@ -94,7 +94,7 @@ class UnifiedModelConfig:
     # ================================================
     # SE3-LPVDS specific parameters
     # ================================================
-    k_init: int = 1
+    K_candidates: List[int] = field(default_factory=lambda: [1])
     
     # PD control parameters (for SE3-LPVDS near target)
     enable_simple_ds_near_target: bool = False
@@ -1051,10 +1051,11 @@ class DSPolicy:
 
             end_pts = [(p_traj[-1], q_traj[-1]) for p_traj, q_traj in zip(p_raw, q_raw)]
             self.se3_lpvds_attractor_generator = self.SE3LVPDSAttractorGenerator(end_pts, mode=config.attractor_resampling_mode)
-            p_att, q_att = self.se3_lpvds_attractor_generator.sample()
-
-            p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
-            p_in = process_tools._smooth_pos(p_in)
+            # p_att, q_att = self.se3_lpvds_attractor_generator.sample()
+            # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
+            # p_in = process_tools._smooth_pos(p_in)
+            t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
+            p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt="savgol")
 
             # Truncate last part of the trajectories to avoid unstable dynamics
             truncate_percent = 0.05
@@ -1081,13 +1082,20 @@ class DSPolicy:
         p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
         p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
         smallest_reconstruction_error = float('inf')
-        for K in K_candidates:
-            model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K)   
-            model.begin()
-            reconstruction_error = model.reconstruction_error() # TODO
+        # self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K_candidates[0])
+        # self.model.begin()
+        for i, K in enumerate(K_candidates):
+            model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K)  
+            try:
+                model.begin()
+            except Exception as e:
+                print(f"Omitting K={K} due to error: {e}")
+                continue
+            reconstruction_error = model.compute_reconstruction_error() # TODO
             if reconstruction_error < smallest_reconstruction_error:
                 smallest_reconstruction_error = reconstruction_error
                 self.model = model
+        print(f"Best K: {K_candidates[i]}")
         if visualize:
             plot_tools.plot_gmm(p_in_roll, self.model.gmm)
 
