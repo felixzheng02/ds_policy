@@ -118,21 +118,7 @@ class DSPolicy:
         get_action: Generate control action for a given state
         update_demo_traj_probs: Update trajectory probabilities based on collision detection
         reset: Reset the trajectory probabilities to the initial values
-    Private methods (should not be called externally):
-        _load_node: Load a pre-trained Neural ODE model from disk
-        _train_node: Train a Neural ODE model on demonstration data
-        _get_action_raw: Generate a raw control action for the given state without CLF constraints
-        _compute_vel: Compute velocities from trajectory positions using finite differences
-        _train_so3_lpvds: Train an SO3-LPVDS model for quaternion orientation control
-        _load_so3_lpvds: Load a pre-trained SO3-LPVDS model for quaternion orientation control
-        _quat_data_preprocess: Preprocess the quaternion data for the SO3-LPVDS model
-        _apply_clf: Apply the Control Lyapunov Function (CLF) constraints to the control action
-        _choose_ref: Choose the reference trajectory and point based on the current position
-        _configure_models: Configure the models based on the provided configuration objects
-        _configure_pos_model: Configure the position model based on its configuration
-        _configure_quat_model: Configure the quaternion model based on its configuration
-        _configure_unified_model: Configure the unified model based on its configuration
-        _validate_model_setup: Validate that the models are properly configured
+        resample: Resample the attractor and adjust the policy accordingly
     """
 
     def __init__(
@@ -287,9 +273,10 @@ class DSPolicy:
             else:
                 # Use SE3-LPVDS model
                 p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
-                # TODO: apply modulations
-                for obj_center in self.modulation_points:
-                    v = self.spherical_normal_modulation(p_curr, obj_center, 0.2, v)
+                
+                # apply modulations
+                for obj_center, radius in self.modulations:
+                    v = spherical_normal_modulation(p_curr, obj_center, radius, v)
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -312,7 +299,7 @@ class DSPolicy:
     def resample(self, state: np.ndarray):
         if self.se3_lpvds:
             self._resample_attractor()
-            self._add_modulation_point(state)
+            self._add_modulation_point(state, radius=0.2)
         else:
             self._update_demo_traj_probs(state, "ref_point", 0.8)
         return
@@ -342,142 +329,13 @@ class DSPolicy:
 
         return pos_shifted, R_shifted
 
-    def gamma_spherical(self, point: np.ndarray, object_center: np.ndarray, radius: float) -> tuple[float, np.ndarray]:
-        """
-        Calculates the gamma function and its gradient for a spherical obstacle in 3D.
-
-        Args:
-            point: A 3-element numpy array representing the point [x, y, z].
-            object_center: A 3-element numpy array representing the center [cx, cy, cz] of the sphere.
-            radius: The radius of the sphere.
-
-        Returns:
-            A tuple containing:
-                - gamma (float): The value of the gamma function Γ(point) = ||point - center||² - radius² + 1.
-                - gradient_gamma (np.ndarray): A 3-element numpy array representing the gradient ∇Γ(point) = [2dx, 2dy, 2dz].
-        """
-        # Ensure inputs are numpy arrays
-        point = np.asarray(point)
-        object_center = np.asarray(object_center)
-
-        # Compute displacement vector from obstacle center
-        displacement = point - object_center
-        dx, dy, dz = displacement[0], displacement[1], displacement[2]
-
-        # Squared distance from point to obstacle center
-        dist_sq = dx**2 + dy**2 + dz**2
-
-        # Gamma function: Γ(point) = ||point - center||² - radius² + 1
-        gamma = dist_sq - radius**2 + 1
-
-        # Gradient of Γ(point): ∇Γ(point) = 2 * displacement = [2dx, 2dy, 2dz]
-        gradient_gamma = 2 * displacement
-
-        return gamma, gradient_gamma
-
-    def normal_modulation(self, gamma: float, gradient_gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Calculates the modulation matrix for obstacle avoidance in 3D using the normal vector.
-
-        Args:
-            gamma: Scalar value of the boundary function Γ(x).
-            gradient_gamma: 3D vector representing the gradient ∇Γ(x).
-
-        Returns:
-            A tuple containing:
-                - D (np.ndarray): 3x3 diagonal matrix of eigenvalues.
-                - E (np.ndarray): 3x3 matrix representing the eigenbasis.
-                - M (np.ndarray): 3x3 modulation matrix.
-        """
-        # Ensure gradient is a numpy array
-        gradient_gamma = np.asarray(gradient_gamma)
-
-        # Initialize outputs to identity matrices (fallback for zero gradient)
-        D = np.eye(3)
-        E = np.eye(3)
-        M = np.eye(3)
-
-        # Calculate the norm of the gradient
-        grad_norm = np.linalg.norm(gradient_gamma)
-
-        # Avoid division by zero if gradient is zero
-        if grad_norm < 1e-8:
-            # If gradient is zero, no modulation is applied (return identity matrices)
-            # This might happen far from the obstacle or exactly at the center
-            return D, E, M
-
-        # Normalize the gradient to get the normal vector 'n'
-        n = gradient_gamma / grad_norm
-
-        # Construct the eigenbasis E = [n, e1, e2]
-        # Find a vector 't' not parallel to 'n'
-        if abs(n[0]) < 0.9:  # If n is not aligned with x-axis
-            t = np.array([1.0, 0.0, 0.0])
-        else: # If n is aligned or nearly aligned with x-axis, use y-axis
-            t = np.array([0.0, 1.0, 0.0])
-
-        # Create the first tangent vector e1 using cross product and normalize
-        e1 = np.cross(n, t)
-        e1_norm = np.linalg.norm(e1)
-        if e1_norm < 1e-8: # Should not happen if t is chosen correctly
-            # Fallback if cross product is zero (n and t were parallel)
-            # This case is unlikely with the above check for t
-            # We can try another axis like [0, 0, 1] or just return identity
-            t = np.array([0.0, 0.0, 1.0])
-            e1 = np.cross(n, t)
-            e1_norm = np.linalg.norm(e1)
-            if e1_norm < 1e-8: return D, E, M # Final fallback
-        e1 = e1 / e1_norm
-
-        # Create the second tangent vector e2 using cross product (already normalized)
-        e2 = np.cross(n, e1)
-        # Optional check: np.linalg.norm(e2) should be close to 1
-
-        # Eigenbasis matrix E (columns are n, e1, e2)
-        E = np.column_stack((n, e1, e2))
-
-        # Calculate eigenvalues
-        # Avoid division by zero or very large values if gamma is close to zero
-        if abs(gamma) < 1e-8:
-            # Handle case where gamma is very small (deep inside obstacle)
-            # Option 1: Set large modulation (e.g., project velocity onto tangent plane)
-            lambda_n = -1000.0 # Large negative value to strongly repel
-            lambda_e = 1.0     # Allow tangential motion
-            # Option 2: Return identity (less aggressive)
-            # return np.eye(3), np.eye(3), np.eye(3)
-        else:
-            lambda_n = 1.0 - 1.0 / gamma  # Eigenvalue for normal direction
-            lambda_e = 1.0 + 1.0 / gamma  # Eigenvalue for tangential directions
-
-        # Eigenvalue matrix D
-        D = np.diag([lambda_n, lambda_e, lambda_e])
-
-        # Modulation matrix M = E * D * E^T
-        # Since E is orthogonal (orthonormal columns), E^T = E^-1
-        M = E @ D @ E.T
-
-        return D, E, M
-
-    def spherical_normal_modulation(self, points: np.ndarray, object_center: np.ndarray, radius: float, v: np.ndarray) -> np.ndarray:
-        gamma, gradient_gamma = self.gamma_spherical(points, object_center, radius)
-        D, E, M = self.normal_modulation(gamma, gradient_gamma)
-        # Apply modulation to velocity
-        if gamma >= 1:
-            v_modulated = M @ v
-        else:
-            repulsion_gain = 1.0
-            repulsive_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
-            xd_rep = repulsion_gain * repulsive_dir
-            v_modulated = xd_rep
-        return v_modulated
-
-    def _add_modulation_point(self, state: np.ndarray):
+    def _add_modulation_point(self, state: np.ndarray, radius: float):
         """
         Args:
             state: Current state (x, y, z, qx, qy, qz, qw)
+            radius: Radius of the modulation
         """
-        # TODO: Sample a modulation from the modulations list
-        self.modulation_points.append(state[:3])
+        self.modulations.append((state[:3], radius))
 
     def _update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
@@ -1205,8 +1063,8 @@ class DSPolicy:
                 p_in[i] = p_in[i][:keep_points]
                 q_in[i] = q_in[i][:keep_points]
 
-            self.k_init = config.k_init
-            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, self.k_init, visualize=False)
+            K_candidates = config.K_candidates
+            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, K_candidates, visualize=False)
 
             # Store PD parameters from config
             self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
@@ -1216,14 +1074,20 @@ class DSPolicy:
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
 
-            self.modulation_points = []
+            self.modulations: list[tuple[np.ndarray, float]] = [] # (position, radius)
 
-    def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_init, visualize=False):
+    def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_candidates, visualize=False):
         t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
         p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
         p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
-        self.model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K_init)
-        self.model.begin()
+        smallest_reconstruction_error = float('inf')
+        for K in K_candidates:
+            model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K)   
+            model.begin()
+            reconstruction_error = model.reconstruction_error() # TODO
+            if reconstruction_error < smallest_reconstruction_error:
+                smallest_reconstruction_error = reconstruction_error
+                self.model = model
         if visualize:
             plot_tools.plot_gmm(p_in_roll, self.model.gmm)
 
@@ -1369,3 +1233,133 @@ class DSPolicy:
                 return (p, R.from_quat(q))
             else:
                 raise ValueError(f"Invalid mode: {self.mode}")
+
+
+def gamma_spherical(point: np.ndarray, object_center: np.ndarray, radius: float) -> tuple[float, np.ndarray]:
+    """
+    Calculates the gamma function and its gradient for a spherical obstacle in 3D.
+
+    Args:
+        point: A 3-element numpy array representing the point [x, y, z].
+        object_center: A 3-element numpy array representing the center [cx, cy, cz] of the sphere.
+        radius: The radius of the sphere.
+
+    Returns:
+        A tuple containing:
+            - gamma (float): The value of the gamma function Γ(point) = ||point - center||² - radius² + 1.
+            - gradient_gamma (np.ndarray): A 3-element numpy array representing the gradient ∇Γ(point) = [2dx, 2dy, 2dz].
+    """
+    # Ensure inputs are numpy arrays
+    point = np.asarray(point)
+    object_center = np.asarray(object_center)
+
+    # Compute displacement vector from obstacle center
+    displacement = point - object_center
+    dx, dy, dz = displacement[0], displacement[1], displacement[2]
+
+    # Squared distance from point to obstacle center
+    dist_sq = dx**2 + dy**2 + dz**2
+
+    # Gamma function: Γ(point) = ||point - center||² - radius² + 1
+    gamma = dist_sq - radius**2 + 1
+
+    # Gradient of Γ(point): ∇Γ(point) = 2 * displacement = [2dx, 2dy, 2dz]
+    gradient_gamma = 2 * displacement
+
+    return gamma, gradient_gamma
+
+def normal_modulation(gamma: float, gradient_gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Calculates the modulation matrix for obstacle avoidance in 3D using the normal vector.
+
+    Args:
+        gamma: Scalar value of the boundary function Γ(x).
+        gradient_gamma: 3D vector representing the gradient ∇Γ(x).
+
+    Returns:
+        A tuple containing:
+            - D (np.ndarray): 3x3 diagonal matrix of eigenvalues.
+            - E (np.ndarray): 3x3 matrix representing the eigenbasis.
+            - M (np.ndarray): 3x3 modulation matrix.
+    """
+    # Ensure gradient is a numpy array
+    gradient_gamma = np.asarray(gradient_gamma)
+
+    # Initialize outputs to identity matrices (fallback for zero gradient)
+    D = np.eye(3)
+    E = np.eye(3)
+    M = np.eye(3)
+
+    # Calculate the norm of the gradient
+    grad_norm = np.linalg.norm(gradient_gamma)
+
+    # Avoid division by zero if gradient is zero
+    if grad_norm < 1e-8:
+        # If gradient is zero, no modulation is applied (return identity matrices)
+        # This might happen far from the obstacle or exactly at the center
+        return D, E, M
+
+    # Normalize the gradient to get the normal vector 'n'
+    n = gradient_gamma / grad_norm
+
+    # Construct the eigenbasis E = [n, e1, e2]
+    # Find a vector 't' not parallel to 'n'
+    if abs(n[0]) < 0.9:  # If n is not aligned with x-axis
+        t = np.array([1.0, 0.0, 0.0])
+    else: # If n is aligned or nearly aligned with x-axis, use y-axis
+        t = np.array([0.0, 1.0, 0.0])
+
+    # Create the first tangent vector e1 using cross product and normalize
+    e1 = np.cross(n, t)
+    e1_norm = np.linalg.norm(e1)
+    if e1_norm < 1e-8: # Should not happen if t is chosen correctly
+        # Fallback if cross product is zero (n and t were parallel)
+        # This case is unlikely with the above check for t
+        # We can try another axis like [0, 0, 1] or just return identity
+        t = np.array([0.0, 0.0, 1.0])
+        e1 = np.cross(n, t)
+        e1_norm = np.linalg.norm(e1)
+        if e1_norm < 1e-8: return D, E, M # Final fallback
+    e1 = e1 / e1_norm
+
+    # Create the second tangent vector e2 using cross product (already normalized)
+    e2 = np.cross(n, e1)
+    # Optional check: np.linalg.norm(e2) should be close to 1
+
+    # Eigenbasis matrix E (columns are n, e1, e2)
+    E = np.column_stack((n, e1, e2))
+
+    # Calculate eigenvalues
+    # Avoid division by zero or very large values if gamma is close to zero
+    if abs(gamma) < 1e-8:
+        # Handle case where gamma is very small (deep inside obstacle)
+        # Option 1: Set large modulation (e.g., project velocity onto tangent plane)
+        lambda_n = -1000.0 # Large negative value to strongly repel
+        lambda_e = 1.0     # Allow tangential motion
+        # Option 2: Return identity (less aggressive)
+        # return np.eye(3), np.eye(3), np.eye(3)
+    else:
+        lambda_n = 1.0 - 1.0 / gamma  # Eigenvalue for normal direction
+        lambda_e = 1.0 + 1.0 / gamma  # Eigenvalue for tangential directions
+
+    # Eigenvalue matrix D
+    D = np.diag([lambda_n, lambda_e, lambda_e])
+
+    # Modulation matrix M = E * D * E^T
+    # Since E is orthogonal (orthonormal columns), E^T = E^-1
+    M = E @ D @ E.T
+
+    return D, E, M
+
+def spherical_normal_modulation(points: np.ndarray, object_center: np.ndarray, radius: float, v: np.ndarray) -> np.ndarray:
+    gamma, gradient_gamma = gamma_spherical(points, object_center, radius)
+    D, E, M = normal_modulation(gamma, gradient_gamma)
+    # Apply modulation to velocity
+    if gamma >= 1:
+        v_modulated = M @ v
+    else:
+        repulsion_gain = 1.0
+        repulsive_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
+        xd_rep = repulsion_gain * repulsive_dir
+        v_modulated = xd_rep
+    return v_modulated
