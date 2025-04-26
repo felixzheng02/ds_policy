@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Literal, Optional, Tuple, List, Union, Callable
 import matplotlib.pyplot as plt
+from predicators.settings import CFG
 
 from .neural_ode.neural_ode import NeuralODE
 import numpy as np
@@ -136,6 +137,7 @@ class DSPolicy:
         lookahead: int = 5,
         demo_traj_probs: np.ndarray = None,
         backtrack_steps: int = 0,
+        relative_cluster_attractor: np.ndarray = None,
         **kwargs
     ):
         """
@@ -190,6 +192,8 @@ class DSPolicy:
         self.quat_none = False
         self.quat_simple = False
         self.se3_lpvds = False
+
+        self.relative_cluster_attractor = relative_cluster_attractor
 
         # Process data for quat model
         (
@@ -1050,6 +1054,10 @@ class DSPolicy:
             self.pos_shift = np.zeros(3)
             self.r_shift = R.identity()
 
+            if self.relative_cluster_attractor is not None:
+                p_att = self.relative_cluster_attractor[0:3]
+                q_att = R.from_quat(self.relative_cluster_attractor[3:])
+
             # Truncate last part of the trajectories to avoid unstable dynamics
             truncate_percent = 0.05
             for i in range(len(p_in)):
@@ -1196,6 +1204,9 @@ class DSPolicy:
                 "b-",
                 linewidth=1,
             )
+
+        if self.se3_lpvds:
+            ax.scatter(self.model.p_att[0], self.model.p_att[1], self.model.p_att[2], "g-", linewidth=1)
 
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
