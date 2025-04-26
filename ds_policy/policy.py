@@ -251,18 +251,16 @@ class DSPolicy:
 
         if self.se3_lpvds:
             # Check if near target and PD control is enabled
-            p_curr = state[:3]
-            q_curr = R.from_quat(state[3:])
-            p_att = self.model.p_att
-            q_att = self.model.q_att
+            p_curr = state[:3] + self.pos_shift
+            q_curr = R.from_quat(state[3:]) * self.r_shift
 
-            pos_dist = np.linalg.norm(p_curr - p_att)
-            q_err = q_att * q_curr.inv()
+            pos_dist = np.linalg.norm(p_curr - self.pos_att)
+            q_err = self.r_att * q_curr.inv()
             ori_angle = np.linalg.norm(q_err.as_rotvec())
 
             if self.enable_simple_ds_near_target and pos_dist < self.simple_ds_pos_threshold and ori_angle < self.simple_ds_ori_threshold:
                 # Use PD controller
-                p_error = p_att - p_curr
+                p_error = self.pos_att - p_curr
                 ori_error_vec = q_err.as_rotvec()
 
                 action_pos = self.K_pos * p_error 
@@ -298,22 +296,13 @@ class DSPolicy:
 
     def resample(self, state: np.ndarray):
         if self.se3_lpvds:
-            self._resample_attractor()
+            new_pos_att, new_R_att = self.se3_lpvds_attractor_generator.sample()
+            self.pos_shift = self.pos_att - new_pos_att
+            self.r_shift = self.r_att * new_R_att.inv()
             self._add_modulation_point(state, radius=0.2)
         else:
             self._update_demo_traj_probs(state, "ref_point", 0.8)
         return
-
-    def _resample_attractor(self):
-        """
-        Resample the attractor and adjust the policy accordingly
-
-        Args:
-            
-        """
-        pos_att, R_att = self.se3_lpvds_attractor_generator.sample()
-        pos_shifted, R_shifted = self._shift_trajs(pos_att, R_att)
-        self.train_se3_lpvds(pos_shifted, R_shifted, pos_att, R_att, self.dt, self.k_init, visualize=False)
 
     def _shift_trajs(self, pos_att: np.ndarray, R_att: R):
         pos_shifted = []
@@ -1056,6 +1045,10 @@ class DSPolicy:
             # p_in = process_tools._smooth_pos(p_in)
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
             p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt="savgol")
+            self.pos_att: np.ndarray = p_att
+            self.r_att: R = q_att
+            self.pos_shift = np.zeros(3)
+            self.r_shift = R.identity()
 
             # Truncate last part of the trajectories to avoid unstable dynamics
             truncate_percent = 0.05
@@ -1229,6 +1222,7 @@ class DSPolicy:
                 R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
                 self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
                 self.gaussian.fit()
+                
 
         def sample(self, state: Optional[np.ndarray] = None) -> tuple[np.ndarray, R]:
             if self.mode == "random":

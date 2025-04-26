@@ -98,10 +98,22 @@ class gmm_class:
             K_init (int):           Initial maximum number of Gaussian components for Bayesian GMM.
         """
 
+        # Standardize quaternion signs (ensure scalar part w is negative)
+        standardized_q_in = []
+        for q in q_in:
+            quat = q.as_quat()
+            if quat[3] > 0:
+                standardized_q_in.append(R.from_quat(-quat))
+            else:
+                standardized_q_in.append(q)
+
+        q_att_quat = q_att.as_quat()
+        if q_att_quat[3] > 0:
+            q_att = R.from_quat(-q_att_quat)
 
         # store parameters
         self.p_in     = p_in
-        self.q_in     = q_in
+        self.q_in     = standardized_q_in
         self.q_att    = q_att
         self.K_init   = K_init
 
@@ -109,7 +121,7 @@ class gmm_class:
         self.N = 7 # Dimension (3 for position, 4 for tangent space orientation)
 
         # form concatenated state in tangent space for GMM fitting
-        self.pq_in    = np.hstack((p_in, riem_log(q_att, q_in)))
+        self.pq_in    = np.hstack((self.p_in, riem_log(self.q_att, self.q_in)))
 
 
 
@@ -131,7 +143,7 @@ class gmm_class:
                         for the primary Gaussian components (excluding duals).
         """
 
-        self.gmm = BayesianGaussianMixture(n_components=self.K_init, n_init=1, random_state=2).fit(self.pq_in)
+        self.gmm = BayesianGaussianMixture(n_components=self.K_init, n_init=1).fit(self.pq_in)
         assignment_arr = self.gmm.predict(self.pq_in)
 
         self._rearrange_array(assignment_arr)
@@ -146,6 +158,7 @@ class gmm_class:
         pq = self.gmm.sample(n_samples=1)[0].flatten()
         p = pq[:3]
         q = pq[3:]
+        # q = riem_exp(R.from_quat(-self.q_att.as_quat()), np.expand_dims(q, axis=0))
         q = riem_exp(self.q_att, np.expand_dims(q, axis=0))
         return p, q.flatten()
 

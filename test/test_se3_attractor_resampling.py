@@ -30,7 +30,7 @@ print(f"Using dt = {dt:.4f}")
 # --- 2. Define Config ---
 unified_config = UnifiedModelConfig(
     mode="se3_lpvds",
-    k_init=1, # Number of Gaussian components
+    K_candidates=[1], # Number of Gaussian components
     attractor_resampling_mode="Gaussian", # How to pick the next attractor
     # Parameters for simple PD controller near target (optional)
     enable_simple_ds_near_target=False,
@@ -54,7 +54,7 @@ policy = DSPolicy(
 print("Policy initialized.")
 
 # --- 4. Visualization Function ---
-def visualize_state(policy, iteration, original_demos_x):
+def visualize_state(policy, current_att_pos, current_att_r, iteration, original_demos_x):
     """Visualizes trajectories, attractor, vector field, and attractor space."""
     # Increase figure width to accommodate three plots
     fig = plt.figure(figsize=(18, 6))
@@ -69,11 +69,9 @@ def visualize_state(policy, iteration, original_demos_x):
         ax1.plot(traj[:, 0], traj[:, 1], traj[:, 2], 'b-', alpha=0.3, linewidth=1.5, label='Original Demo' if i == 0 else "")
 
     # Shifted Demos (recalculate based on current attractor)
-    current_att_pos = policy.model.p_att
-    current_att_rot = policy.model.q_att
     try:
         # Use policy's internal method to get shifted trajectories
-        shifted_pos, shifted_rot_list_of_lists = policy._shift_trajs(current_att_pos, current_att_rot)
+        shifted_pos, shifted_rot_list_of_lists = policy._shift_trajs(current_att_pos, current_att_r)
         # The shifted trajectories are used for internal training, plot them for visualization
         for i, traj in enumerate(shifted_pos):
              ax1.plot(traj[:, 0], traj[:, 1], traj[:, 2], 'g-', alpha=0.8, linewidth=2, label='Shifted Demo (for training)' if i == 0 else "")
@@ -87,7 +85,7 @@ def visualize_state(policy, iteration, original_demos_x):
     # Attractor Orientation (as axes)
     axes_len = 0.25 # Increased length further from 0.15
     try:
-        att_axes = current_att_rot.apply(np.eye(3) * axes_len)
+        att_axes = current_att_r.apply(np.eye(3) * axes_len)
         colors = ['r', 'g', 'b'] # X, Y, Z
         for i in range(3):
             ax1.quiver(current_att_pos[0], current_att_pos[1], current_att_pos[2],
@@ -142,7 +140,7 @@ def visualize_state(policy, iteration, original_demos_x):
     # Use a fixed representative quaternion for sampling the field (attractor orientation)
     # Ensure it's in xyzw format for get_action
     try:
-        rep_quat = current_att_rot.as_quat() # xyzw
+        rep_quat = current_att_r.as_quat() # xyzw
         if len(rep_quat) != 4: raise ValueError("Invalid quaternion from attractor")
     except Exception as e:
         print(f"Warning: Cannot use attractor orientation ({e}), using identity quat [0,0,0,1].")
@@ -206,9 +204,6 @@ def visualize_state(policy, iteration, original_demos_x):
     # Plot all possible end points (positions)
     ax3.scatter(end_positions[:, 0], end_positions[:, 1], end_positions[:, 2], c='grey', s=50, alpha=0.6, label='Possible Attractors (Demo End Pts)')
 
-    # Plot current attractor position
-    current_att_pos = policy.model.p_att
-    current_att_rot = policy.model.q_att
     ax3.plot(current_att_pos[0], current_att_pos[1], current_att_pos[2], 'c*', markersize=20, label='Current Sampled Attractor')
 
     # Optional: Plot orientations as quivers for all end points
@@ -228,7 +223,7 @@ def visualize_state(policy, iteration, original_demos_x):
     axes_len_curr = 0.25 # Increased length further from 0.15
     colors_curr = ['r', 'g', 'b']
     try:
-        att_axes = current_att_rot.apply(np.eye(3) * axes_len_curr)
+        att_axes = current_att_r.apply(np.eye(3) * axes_len_curr)
         for i in range(3):
             ax3.quiver(current_att_pos[0], current_att_pos[1], current_att_pos[2],
                        att_axes[i, 0], att_axes[i, 1], att_axes[i, 2],
@@ -266,30 +261,26 @@ resample_interval = 2.0 # Seconds between resamples
 
 for i in range(num_resamples):
     print(f"--- Visualization {i} ---")
-    current_pos = policy.model.p_att
-    current_quat = policy.model.q_att.as_quat()
-    print(f"Current attractor: Pos={np.round(current_pos, 3)}, Quat={np.round(current_quat, 3)}")
-    visualize_state(policy, i, x) # Pass original demos for reference
+    current_pos, current_r = policy.se3_lpvds_attractor_generator.sample()
+    print(f"Current attractor: Pos={np.round(current_pos, 3)}, Quat={np.round(current_r.as_quat(), 3)}")
+    visualize_state(policy, current_pos, current_r, i, x) # Pass original demos for reference
 
-    # Check if it's the last iteration before trying to resample
-    if i < num_resamples - 1:
-        print(f"--- Resampling Attractor {i+1}/{num_resamples} ---")
-        resample_start_time = time.time()
-        # Call the internal resampling method which includes retraining
-        policy._resample_attractor()
-        resample_duration = time.time() - resample_start_time
-        new_pos = policy.model.p_att
-        new_quat = policy.model.q_att.as_quat()
-        print(f"Resampling and retraining took {resample_duration:.2f}s")
-        print(f"New attractor: Pos={np.round(new_pos, 3)}, Quat={np.round(new_quat, 3)}")
+    # # Check if it's the last iteration before trying to resample
+    # if i < num_resamples - 1:
+    #     print(f"--- Resampling Attractor {i+1}/{num_resamples} ---")
+    #     resample_start_time = time.time()
+    #     # Call the internal resampling method which includes retraining
+    #     policy.se3_lpvds_attractor_generator.sample()
+    #     resample_duration = time.time() - resample_start_time
+    #     new_pos = policy.model.p_att
+    #     new_quat = policy.model.q_att.as_quat()
+    #     print(f"Resampling and retraining took {resample_duration:.2f}s")
+    #     print(f"New attractor: Pos={np.round(new_pos, 3)}, Quat={np.round(new_quat, 3)}")
 
     # Remove the sleep, plt.show(block=True) handles waiting
     # time.sleep(max(0, resample_interval - resample_duration))
 
 
-# --- Final Visualization ---
-print(f"--- Final Visualization ({num_resamples}) ---")
-visualize_state(policy, num_resamples, x)
-print("Test complete. Close the plot window to exit.")
+
 # The final plt.show() is now implicitly handled by the last call to visualize_state
 # plt.show() # Keep final plot open until manually closed
