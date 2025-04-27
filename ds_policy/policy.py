@@ -1049,14 +1049,15 @@ class DSPolicy:
             # p_in = process_tools._smooth_pos(p_in)
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
             p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt="savgol")
-            self.pos_att: np.ndarray = p_att
-            self.r_att: R = q_att
-            self.pos_shift = np.zeros(3)
-            self.r_shift = R.identity()
 
             if self.relative_cluster_attractor is not None:
                 p_att = self.relative_cluster_attractor[0:3]
                 q_att = R.from_quat(self.relative_cluster_attractor[3:])
+
+            self.pos_att: np.ndarray = p_att
+            self.r_att: R = q_att
+            self.pos_shift = np.zeros(3)
+            self.r_shift = R.identity()
 
             # Truncate last part of the trajectories to avoid unstable dynamics
             truncate_percent = 0.05
