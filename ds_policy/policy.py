@@ -1,3 +1,4 @@
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Literal, Optional, Tuple, List, Union, Callable
@@ -1250,9 +1251,12 @@ class DSPolicy:
             self.end_pts = end_pts
             self.mode = mode
             if mode == "Gaussian":
-                R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
-                self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
-                self.gaussian.fit()
+                if len(self.end_pts) == 1:
+                    logging.warning("Only one end point provided. Gaussian not fit.")
+                else:
+                    R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
+                    self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
+                    self.gaussian.fit()
                 
 
         def sample(self, state: Optional[np.ndarray] = None) -> tuple[np.ndarray, R]:
