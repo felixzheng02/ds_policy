@@ -105,7 +105,7 @@ class UnifiedModelConfig:
     K_ori: float = 1.0
 
     # Resampling parameters
-    attractor_resampling_mode: str = "random" # This determines how to resample the attractor. Could be "random", "nearest", "Gaussian"
+    attractor_resampling_mode: str = "Gaussian" # This determines how to resample the attractor. Could be "random", "nearest", "Gaussian"
     
     # def __post_init__(self):
     #     if self.load_path is None and self.save_path is None:
@@ -1220,6 +1220,25 @@ class DSPolicy:
         else:
             plt.savefig(save_path)
         plt.close()
+
+    def compute_reconstruction_error(self) -> float:
+        """
+        Compute the reconstruction error of the trained model, using the training data.
+
+        Returns:
+            error: float, the total reconstruction error
+            avg_error: float, the average reconstruction error
+        """
+        error = 0
+        total_pts = 0
+        for i in range(len(self.x)):
+            total_pts += len(self.x[i])
+            for j in range(len(self.x[i])):
+                action = self.get_action(np.concatenate([self.x[i][j], self.quat[i][j]]), clf=True, alpha_V=20.0, lookahead=5)
+                x_dot_pred = action[:3]
+                omega_pred = action[3:6]
+                error += np.linalg.norm(self.x_dot[i][j] - x_dot_pred) + np.linalg.norm(self.omega[i][j] - omega_pred)
+        return error, error / total_pts
 
     class SE3LVPDSAttractorGenerator:
         def __init__(self, end_pts: list[tuple[np.ndarray, R]], mode: str):

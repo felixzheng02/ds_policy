@@ -1,0 +1,520 @@
+import numpy as np
+import math
+from typing import List, Tuple, Callable, Optional
+import random
+from tqdm import tqdm # Use tqdm.notebook for Jupyter, tqdm otherwise
+
+from ds_policy import load_data
+
+# --- SE(3) Point Distance ---
+
+def se3_point_distance(
+    point1: np.ndarray,
+    point2: np.ndarray,
+    alpha: float = 0.5
+) -> float:
+    """
+    Calculates a weighted distance between two SE(3) points.
+
+    Args:
+        point1: First point [x, y, z, qx, qy, qz, qw].
+        point2: Second point [x, y, z, qx, qy, qz, qw].
+        alpha: Weight for positional distance (0 <= alpha <= 1).
+               Orientation distance weight is (1 - alpha).
+
+    Returns:
+        Combined distance.
+    """
+    if point1.shape != (7,) or point2.shape != (7,):
+        raise ValueError("SE(3) points must have shape (7,)")
+    if not (0 <= alpha <= 1):
+         raise ValueError("alpha must be between 0 and 1")
+
+    # Positional distance (Euclidean)
+    pos1 = point1[:3]
+    pos2 = point2[:3]
+    pos_dist = np.linalg.norm(pos1 - pos2)
+
+    # Orientation distance (geodesic distance on S^3 for quaternions)
+    quat1 = point1[3:]
+    quat2 = point2[3:]
+
+    # Ensure quaternions are normalized (optional, but good practice)
+    norm1 = np.linalg.norm(quat1)
+    norm2 = np.linalg.norm(quat2)
+    if not np.isclose(norm1, 1.0): quat1 /= norm1
+    if not np.isclose(norm2, 1.0): quat2 /= norm2
+
+    # Dot product, clipped for numerical stability
+    dot_product = np.clip(np.abs(np.dot(quat1, quat2)), 0.0, 1.0)
+
+    # Angle between quaternions (theta = arccos(dot))
+    # Geodesic distance is 2 * theta
+    orient_dist = 2.0 * np.arccos(dot_product)
+
+    # Combined distance
+    return alpha * pos_dist + (1.0 - alpha) * orient_dist
+
+# --- Weighted Fréchet Distance ---
+
+def weighted_frechet_distance(
+    traj1: np.ndarray,
+    traj2: np.ndarray,
+    point_dist_func: Callable[[np.ndarray, np.ndarray], float],
+    beta: float = 1.0
+) -> float:
+    """
+    Calculates the discrete Fréchet distance between two trajectories,
+    with exponential weighting emphasizing later points.
+
+    Args:
+        traj1: First trajectory (n, 7).
+        traj2: Second trajectory (m, 7).
+        point_dist_func: Function to compute distance between two SE(3) points.
+        beta: Controls the exponential weight growth (beta > 0).
+              Weight = exp(beta * max_norm_progress).
+
+    Returns:
+        Weighted Fréchet distance.
+    """
+    n = len(traj1)
+    m = len(traj2)
+    if n == 0 or m == 0:
+        return np.inf # Or handle as appropriate
+
+    # Dynamic Programming table
+    ca = np.full((n, m), -1.0)
+
+    # Weight function
+    def get_weight(i, j, len1, len2, beta_val):
+        if len1 <= 1 and len2 <= 1: return 1.0 # Avoid division by zero for single points
+        norm_i = i / (len1 - 1) if len1 > 1 else 0.0
+        norm_j = j / (len2 - 1) if len2 > 1 else 0.0
+        max_norm_progress = max(norm_i, norm_j)
+        # Ensure weight is at least 1, growing exponentially
+        return np.exp(beta_val * max_norm_progress)
+
+    # Fill the DP table
+    # The table ca[i,j] represents the Fréchet distance between:
+    # - the prefix of traj1 up to index i (i.e., traj1[0:i+1])
+    # - the prefix of traj2 up to index j (i.e., traj2[0:j+1])
+    for i in range(n):
+        for j in range(m):
+            # Calculate weighted distance between current points
+            weight = get_weight(i, j, n, m, beta)
+            # Higher weights for later trajectory points make them more influential in the distance calculation
+            dist = weight * point_dist_func(traj1[i], traj2[j])
+
+            if i == 0 and j == 0:
+                # Base case: distance between first points of both trajectories
+                ca[i, j] = dist
+            elif i == 0:
+                # First row: can only move right (advance in traj2)
+                # The Fréchet distance must account for the maximum distance encountered
+                ca[i, j] = max(ca[i, j-1], dist)
+            elif j == 0:
+                # First column: can only move down (advance in traj1)
+                ca[i, j] = max(ca[i-1, j], dist)
+            else:
+                # General case: Fréchet distance is the maximum of
+                # 1. The minimum distance considering three possible moves:
+                #    - Advance in traj1 (ca[i-1, j])
+                #    - Advance in both trajectories diagonally (ca[i-1, j-1])
+                #    - Advance in traj2 (ca[i, j-1])
+                # 2. The distance between current points (dist)
+                #
+                # This represents finding the optimal "walking strategy" that minimizes
+                # the maximum distance between corresponding points in both trajectories
+                ca[i, j] = max(min(ca[i-1, j], ca[i-1, j-1], ca[i, j-1]), dist)
+
+    # Final value ca[n-1, m-1] is the Fréchet distance between the complete trajectories
+    return ca[n-1, m-1]
+
+# --- K-Medoids Implementation ---
+
+def k_medoids(
+    trajectories: List[np.ndarray],
+    k: int,
+    dist_func: Callable[[np.ndarray, np.ndarray], float],
+    max_iter: int = 100,
+    tol: float = 1e-4,
+    random_seed: Optional[int] = None
+) -> Tuple[List[int], List[int], float]:
+    """
+    Performs K-Medoids clustering.
+
+    Args:
+        trajectories: List of trajectories (numpy arrays (n_i, 7)).
+        k: Number of clusters.
+        dist_func: Trajectory distance function (e.g., weighted_frechet_distance).
+        max_iter: Maximum number of iterations.
+        tol: Tolerance for convergence (change in total cost). Not implemented yet.
+        random_seed: Optional random seed for reproducibility.
+
+    Returns:
+        Tuple containing:
+            - medoid_indices: List of indices of the final medoids.
+            - labels: List of cluster assignments for each trajectory.
+            - total_cost: Sum of distances from points to their medoid.
+    """
+    if random_seed is not None:
+        random.seed(random_seed)
+        np.random.seed(random_seed) # For potential numpy randomness if added
+
+    num_traj = len(trajectories)
+    if k > num_traj:
+        raise ValueError("k cannot be greater than the number of trajectories")
+    if k <= 0:
+         raise ValueError("k must be positive")
+
+    # --- Distance Matrix Calculation (Expensive!) ---
+    # Calculate pairwise distances - This is the bottleneck
+    # Consider alternatives for very large datasets (e.g., calculating on the fly)
+    print(f"Calculating pairwise distances for {num_traj} trajectories...")
+    distance_matrix = np.full((num_traj, num_traj), 0.0)
+    # Use tqdm for progress bar
+    for i in tqdm(range(num_traj), desc="Pairwise Dist"):
+        for j in range(i + 1, num_traj):
+            dist = dist_func(trajectories[i], trajectories[j])
+            distance_matrix[i, j] = dist
+            distance_matrix[j, i] = dist
+    print("Distance matrix calculation complete.")
+
+    # --- K-Medoids Algorithm (PAM - Partitioning Around Medoids style) ---
+
+    # 1. Initialization: Randomly select k points as initial medoids
+    current_medoid_indices = random.sample(range(num_traj), k)
+    current_labels = [-1] * num_traj
+    current_total_cost = np.inf
+
+    print(f"Running K-Medoids (k={k})...")
+    for iteration in range(max_iter):
+        print(f"  Iteration {iteration+1}/{max_iter}")
+        old_medoid_indices = current_medoid_indices[:] # Copy list
+
+        # 2. Assignment Step: Assign each point to the nearest medoid
+        new_labels = [-1] * num_traj
+        new_total_cost = 0.0
+        for i in range(num_traj):
+            min_dist = np.inf
+            best_label = -1
+            for label_idx, medoid_idx in enumerate(current_medoid_indices):
+                dist = distance_matrix[i, medoid_idx]
+                if dist < min_dist:
+                    min_dist = dist
+                    best_label = label_idx # Assign to cluster 'label_idx'
+            new_labels[i] = best_label
+            if i not in current_medoid_indices: # Cost is sum dist to medoid
+                 new_total_cost += min_dist
+
+        # 3. Update Step: Find the best medoid for each cluster
+        new_medoid_indices = [-1] * k
+        clusters = [[] for _ in range(k)]
+        for i, label in enumerate(new_labels):
+             if label != -1: # Should always be assigned
+                 clusters[label].append(i)
+
+        temp_total_cost_check = 0.0 # For verification
+        for label_idx in range(k):
+            cluster_points_indices = clusters[label_idx]
+            if not cluster_points_indices: # Empty cluster, should not happen with PAM
+                # Handle gracefully: re-initialize perhaps? Or raise error.
+                # For now, keep an old medoid if available.
+                # This might happen if k is large and data is sparse.
+                print(f"Warning: Cluster {label_idx} became empty.")
+                if label_idx < len(old_medoid_indices):
+                     new_medoid_indices[label_idx] = old_medoid_indices[label_idx]
+                else: # If even old medoid is gone, pick random point
+                    new_medoid_indices[label_idx] = random.choice(range(num_traj))
+                continue
+
+            min_cluster_cost = np.inf
+            best_medoid_for_cluster = -1
+
+            # Iterate through each point *in the cluster* as potential new medoid
+            for potential_medoid_idx in cluster_points_indices:
+                current_cluster_cost = 0.0
+                for point_idx in cluster_points_indices:
+                    current_cluster_cost += distance_matrix[point_idx, potential_medoid_idx]
+
+                if current_cluster_cost < min_cluster_cost:
+                    min_cluster_cost = current_cluster_cost
+                    best_medoid_for_cluster = potential_medoid_idx
+
+            new_medoid_indices[label_idx] = best_medoid_for_cluster
+            temp_total_cost_check += min_cluster_cost # Sum of costs within cluster
+
+        current_medoid_indices = sorted(new_medoid_indices) # Keep sorted for comparison
+        current_labels = new_labels
+        current_total_cost = temp_total_cost_check
+
+        print(f"  Current Total Cost: {current_total_cost:.4f}")
+
+        # 4. Check for convergence
+        if set(current_medoid_indices) == set(old_medoid_indices):
+            print(f"Convergence reached after {iteration + 1} iterations.")
+            break
+
+    else: # Loop finished without break (max_iter reached)
+        print(f"Max iterations ({max_iter}) reached.")
+
+
+    # Final assignment and cost calculation based on final medoids
+    final_labels = [-1] * num_traj
+    final_total_cost = 0.0
+    for i in range(num_traj):
+        min_dist = np.inf
+        best_label = -1
+        for label_idx, medoid_idx in enumerate(current_medoid_indices):
+             dist = distance_matrix[i, medoid_idx]
+             if dist < min_dist:
+                 min_dist = dist
+                 best_label = label_idx
+        final_labels[i] = best_label
+        # Cost calculation sums distance for non-medoids to their medoid
+        # Alternatively, sum all distances within cluster to the medoid
+        if i not in current_medoid_indices:
+            final_total_cost += min_dist
+
+    # Recalculate total cost based on definition: sum of distances within each cluster to its medoid
+    final_total_cost_recalc = 0.0
+    clusters_final = [[] for _ in range(k)]
+    for i, label in enumerate(final_labels):
+        clusters_final[label].append(i)
+
+    for label_idx, medoid_idx in enumerate(current_medoid_indices):
+         cluster_indices = clusters_final[label_idx]
+         for point_idx in cluster_indices:
+             final_total_cost_recalc += distance_matrix[point_idx, medoid_idx]
+
+
+    print(f"Final K-Medoids Cost (Recalculated): {final_total_cost_recalc:.4f}")
+
+    return current_medoid_indices, final_labels, final_total_cost_recalc
+
+
+# --- Optimal K Selection ---
+
+def find_optimal_k_elbow(
+    trajectories: List[np.ndarray],
+    k_min: int,
+    k_max: int,
+    dist_func: Callable[[np.ndarray, np.ndarray], float],
+    max_iter_kmedoids: int = 50, # Reduce iterations for faster search
+    improvement_threshold_pct: float = 0.85, # Look for drop below 85% of previous improvement
+    random_seed: Optional[int] = None
+) -> Tuple[int, List[int]]:
+    """
+    Finds the optimal k using the elbow method based on total intra-cluster distance.
+    Stops testing additional k values once the elbow is detected.
+
+    Args:
+        trajectories: List of trajectories.
+        k_min: Minimum k to check.
+        k_max: Maximum k to check.
+        dist_func: Trajectory distance function.
+        max_iter_kmedoids: Max iterations for each K-Medoids run.
+        improvement_threshold_pct: Percentage threshold to detect elbow.
+                                   e.g., 0.85 means stop if improvement is less
+                                   than 85% of the previous improvement.
+        random_seed: Optional random seed.
+
+    Returns:
+        Tuple containing:
+            - optimal_k: The estimated best number of clusters.
+            - best_labels: Cluster assignments for the optimal k.
+    """
+    if k_min < 1: k_min = 1 # Need at least 1 cluster
+    num_traj = len(trajectories)
+    k_max = min(k_max, num_traj) # Cannot have more clusters than points
+
+    costs = []
+    labels_history = []
+    k_values = list(range(k_min, k_max + 1))
+
+    if not k_values:
+        raise ValueError("k_min is greater than k_max or number of trajectories")
+
+    print(f"Searching for optimal k from {k_min} to {k_max}...")
+    
+    # Need at least 2 k values to detect elbow
+    min_k_to_test = min(k_min + 1, k_max)
+    
+    # Test the first two k values at minimum
+    for k in range(k_min, min_k_to_test + 1):
+        print(f"\n--- Testing k = {k} ---")
+        _, labels, cost = k_medoids(
+            trajectories, k, dist_func, max_iter_kmedoids, random_seed=random_seed
+        )
+        costs.append(cost)
+        labels_history.append(labels)
+        print(f"Cost for k={k}: {cost:.4f}")
+    
+    # If we have at least 2 values, check for elbow as we go
+    if len(costs) >= 2:
+        prev_improvement = costs[0] - costs[1]
+        print(f"\n--- Elbow Analysis ---")
+        print(f"Improvement from k={k_min} to k={k_min+1}: {prev_improvement:.4f}")
+        
+        # Continue testing k values until we detect an elbow
+        for k_idx, k in enumerate(range(min_k_to_test + 1, k_max + 1), 2):
+            print(f"\n--- Testing k = {k} ---")
+            _, labels, cost = k_medoids(
+                trajectories, k, dist_func, max_iter_kmedoids, random_seed=random_seed
+            )
+            costs.append(cost)
+            labels_history.append(labels)
+            
+            # Calculate improvement
+            current_improvement = costs[k_idx-1] - cost
+            print(f"Cost for k={k}: {cost:.4f}")
+            print(f"Improvement from k={k-1} to k={k}: {current_improvement:.4f}")
+            
+            # Check for elbow
+            if current_improvement < prev_improvement * improvement_threshold_pct and prev_improvement > 1e-6:
+                print(f"Elbow detected at k = {k-1}. Improvement dropped below threshold.")
+                # Return the previous k as optimal (where the elbow is)
+                return k-1, labels_history[k_idx-1]
+            
+            # Check for negligible improvement
+            if current_improvement < 1e-6:
+                print(f"Improvement negligible or negative at k = {k-1}. Stopping search.")
+                # Return the previous k as optimal
+                return k-1, labels_history[k_idx-1]
+                
+            prev_improvement = current_improvement
+    
+    # If no elbow found or only tested one k value
+    if len(costs) <= 1:
+        print("Only one k value tested, returning results for k_min.")
+        return k_values[0], labels_history[0]
+    else:
+        # No significant elbow detected, return the highest k tested
+        last_k = k_min + len(costs) - 1
+        print(f"No significant elbow detected after testing up to k={last_k}. Using this as optimal k.")
+        return last_k, labels_history[-1]
+
+# --- Main Function ---
+
+def cluster_se3_trajectories_auto_k(
+    trajectories: List[np.ndarray],
+    k_min: int = 2,
+    k_max: int = 10,
+    se3_dist_alpha: float = 0.5,
+    frechet_beta: float = 1.0,
+    max_iter_kmedoids: int = 50,
+    elbow_threshold_pct: float = 0.85,
+    random_seed: Optional[int] = None
+) -> Tuple[int, List[int]]:
+    """
+    Clusters SE(3) trajectories using K-Medoids with weighted Fréchet distance,
+    automatically selecting the number of clusters (k).
+
+    Args:
+        trajectories: List of trajectories, where each is a NumPy array
+                      of shape (n_i, 7) [x, y, z, qx, qy, qz, qw].
+                      n_i can vary between trajectories.
+        k_min: Minimum number of clusters to test.
+        k_max: Maximum number of clusters to test.
+        se3_dist_alpha: Weight for position vs orientation in point distance (0-1).
+        frechet_beta: Exponential weight factor for Fréchet distance (>=0).
+        max_iter_kmedoids: Max iterations for K-Medoids runs during k search.
+        elbow_threshold_pct: Threshold for elbow detection (e.g., 0.85).
+        random_seed: Seed for reproducibility.
+
+    Returns:
+        Tuple containing:
+        - optimal_k: The estimated best number of clusters.
+        - labels: List of cluster assignments for each trajectory for the optimal k.
+                  The index corresponds to the trajectory index in the input list.
+    """
+    if not trajectories:
+        return 0, []
+
+    num_traj = len(trajectories)
+    print(f"Starting clustering for {num_traj} trajectories.")
+    print(f"Parameters: k_min={k_min}, k_max={k_max}, alpha={se3_dist_alpha}, beta={frechet_beta}")
+
+    # Ensure k_max is reasonable
+    k_max = min(k_max, num_traj)
+    if k_min > k_max:
+        k_min = k_max
+        print(f"Warning: k_min > k_max, setting k_min = k_max = {k_min}")
+    if k_min <= 0:
+        k_min = 1
+        print("Warning: k_min <= 0, setting k_min = 1")
+
+
+    # Define the specific distance function to use
+    def traj_distance(t1, t2):
+        point_dist_func = lambda p1, p2: se3_point_distance(p1, p2, alpha=se3_dist_alpha)
+        return weighted_frechet_distance(t1, t2, point_dist_func, beta=frechet_beta)
+
+    # Find the optimal k and corresponding labels
+    optimal_k, labels = find_optimal_k_elbow(
+        trajectories,
+        k_min,
+        k_max,
+        traj_distance,
+        max_iter_kmedoids=max_iter_kmedoids,
+        improvement_threshold_pct=elbow_threshold_pct,
+        random_seed=random_seed
+    )
+
+    print(f"Optimal k: {optimal_k}")
+    print(f"Labels: {labels}")
+
+    # Plot the trajectories with their assigned labels
+    try:
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        import matplotlib.cm as cm
+        
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Generate a color map with distinct colors for each cluster
+        colors = cm.rainbow(np.linspace(0, 1, optimal_k))
+        
+        # Plot each trajectory with color based on its label
+        for i, (traj, label) in enumerate(zip(trajectories, labels)):
+            # Extract x, y, z coordinates (first 3 columns)
+            x, y, z = traj[:, 0], traj[:, 1], traj[:, 2]
+            
+            # Plot the trajectory with the color of its cluster
+            ax.plot(x, y, z, color=colors[label], linewidth=2, alpha=0.7, 
+                   label=f'Cluster {label}' if i == labels.index(label) else "")
+            
+            # Mark the start and end points
+            ax.scatter(x[0], y[0], z[0], color=colors[label], marker='o', s=50)
+            ax.scatter(x[-1], y[-1], z[-1], color=colors[label], marker='x', s=50)
+        
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title(f'SE(3) Trajectories Clustered into {optimal_k} Groups')
+        
+        # Create legend with unique entries
+        handles, labels_legend = ax.get_legend_handles_labels()
+        by_label = dict(zip(labels_legend, handles))
+        ax.legend(by_label.values(), by_label.keys(), loc='best')
+        
+        plt.tight_layout()
+        plt.show()
+    except ImportError:
+        print("Matplotlib not installed. Cannot plot trajectories.")
+
+    return optimal_k, labels
+
+
+if __name__ == "__main__":
+    option = "PnPCounterToCab_Pick_option"
+    task_name = "PnPCounterToCab"
+    # Assuming load_data is accessible and returns data in the expected format
+    # Note: ds_policy expects lists of numpy arrays for x, x_dot, quat, omega, gripper
+    x, x_dot, q, omega, gripper = load_data(task_name, option, finger=True, transform_to_object_of_interest_frame=True, debug_on=False)
+    trajectories = [np.concatenate([x[i], q[i]], axis=1) for i in range(len(x))]
+
+    optimal_k, labels = cluster_se3_trajectories_auto_k(trajectories, k_min=2, k_max=10, se3_dist_alpha=0.5, frechet_beta=1.0, max_iter_kmedoids=50, elbow_threshold_pct=0.85, random_seed=None)
+    print(f"Optimal k: {optimal_k}")
+    print(f"Labels: {labels}")
