@@ -223,7 +223,7 @@ def _filter(p_list, q_list, t_list):
     return p_filter, q_filter, t_filter
 
 
-def pre_process(p_raw, q_raw, t_raw, opt="savgol"):
+def pre_process(p_raw, q_raw, t_raw, shift=False, opt="savgol"):
     """
     Complete preprocessing pipeline for position and orientation trajectories
     
@@ -238,13 +238,20 @@ def pre_process(p_raw, q_raw, t_raw, opt="savgol"):
         q_in: Preprocessed orientation trajectories
         t_raw: Time stamps
     """
+    if shift:
+        p_in, p_att, p_att_list = _shift_pos(p_raw)
+        q_in, q_att, q_att_list = _shift_ori(q_raw)
+        p_in = _smooth_pos(p_in)
+    else:
+        L = len(p_raw)
+        p_att_list  = [p_raw[l][-1, :]  for l in range(L)]  
+        p_att  =  np.mean(np.array(p_att_list), axis=0)
 
-    p_in, p_att, p_att_list = _shift_pos(p_raw)
-    q_in, q_att, q_att_list = _shift_ori(q_raw)
+        q_att_list  = [q_raw[l][-1]  for l in range(L)]  
+        q_att  = R.from_quat([q_att_list[l].as_quat() for l in range(L)]).mean()
 
-    end_pose_list = [[p_att_list[i], q_att_list[i]] for i in range(len(p_att_list))]
-
-    p_in                    = _smooth_pos(p_in)
+        p_in                    = _smooth_pos(p_raw)
+        q_in                    = q_raw
     # q_in                    = _smooth_ori(q_in, q_att, opt) # needed or not?
 
     # p_in, q_in, t_in        = _filter(p_in, q_in, t_raw)  # needed or not?

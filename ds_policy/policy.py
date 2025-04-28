@@ -1048,7 +1048,7 @@ class DSPolicy:
             # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
             # p_in = process_tools._smooth_pos(p_in)
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
-            p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, opt="savgol")
+            p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, shift=False, opt="savgol")
 
             if self.relative_cluster_attractor is not None:
                 p_att = self.relative_cluster_attractor[0:3]

@@ -30,6 +30,7 @@ def load_data(task: str, option: str, finger: bool = False, transform_to_object_
         os.path.dirname(os.path.realpath(__file__)),
         "..",
         "demo_data",
+        # "smoothing_window_21_test_saving_contact"
         path,
     )
     seg_num = str(seg_num_int).zfill(2)

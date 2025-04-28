@@ -508,11 +508,11 @@ def cluster_se3_trajectories_auto_k(
 
 
 if __name__ == "__main__":
-    option = "PnPCounterToCab_Pick_option"
-    task_name = "PnPCounterToCab"
+    option = "OpenSingleDoor_MoveTowards_option"
+    task_name = "OpenSingleDoor"
     # Assuming load_data is accessible and returns data in the expected format
     # Note: ds_policy expects lists of numpy arrays for x, x_dot, quat, omega, gripper
-    x, x_dot, q, omega, gripper = load_data(task_name, option, finger=True, transform_to_object_of_interest_frame=True, debug_on=False)
+    x, x_dot, q, omega, gripper = load_data(task_name, option, finger=False, transform_to_object_of_interest_frame=True, debug_on=False)
     trajectories = [np.concatenate([x[i], q[i]], axis=1) for i in range(len(x))]
 
     optimal_k, labels = cluster_se3_trajectories_auto_k(trajectories, k_min=2, k_max=10, se3_dist_alpha=0.5, frechet_beta=1.0, max_iter_kmedoids=50, elbow_threshold_pct=0.85, random_seed=None)
