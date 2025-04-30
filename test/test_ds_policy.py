@@ -282,7 +282,7 @@ class Animator:
         )
 
 
-if __name__ == "__main__":
+def main():
     if (
         True
     ): # this will save trajectory data. use False to directlly animate without simulating every time
@@ -359,6 +359,69 @@ if __name__ == "__main__":
             alpha_V=10,
             lookahead=20,
         )
+    
+    # Load and visualize the results
+    data = np.load("ds_policy/data/test_ds_policy.npz", allow_pickle=True)
+    demo_trajs = data["demo_trajs"]
+    traj = data["traj"] # Trajectory is N x 7
+    ref_traj_indices = data["ref_traj_indices"]
+    ref_point_indices = data["ref_point_indices"]
+    animator = Animator(traj, demo_trajs, ref_traj_indices, ref_point_indices)
+    animator.animate(None)
+
+if __name__ == "__main__":
+    option = "CloseSingleDoor-Op0"
+    x = np.load(f"./trajectory_data/x_{option}.npy", allow_pickle=True)
+    x_dot = np.load(f"./trajectory_data/x_dot_{option}.npy", allow_pickle=True)
+    quat = np.load(f"./trajectory_data/quat_{option}.npy", allow_pickle=True)
+    omega = np.load(f"./trajectory_data/omega_{option}.npy", allow_pickle=True)
+
+    unified_config = UnifiedModelConfig(
+        mode="se3_lpvds",
+        K_candidates=[3],
+        enable_simple_ds_near_target=True,
+    )
+
+    ds_policy = DSPolicy(
+        x=x,
+        x_dot=x_dot,
+        quat=quat,
+        omega=omega,
+        gripper=[],
+        unified_config=unified_config,
+        dt=1/60,
+        switch=False,
+        )
+    
+    simulator = Simulator(ds_policy)
+        
+    # Randomly initialize starting point
+    # Set random seed for reproducibility
+    # rng = np.random.default_rng(seed=3)
+    rng = np.random.RandomState()
+    init_pos_x = rng.uniform(low=-0.3, high=0.3)  # Random x,y,z position
+    init_pos_y = rng.uniform(low=-0.4, high=-0.1)
+    init_pos_z = rng.uniform(low=-0.3, high=0.3)
+    # Set the same random seed for quaternion initialization to ensure reproducibility
+    # quat_rng = np.random.RandomState(seed=3)
+    quat_rng = np.random.RandomState()
+    # init_euler = R.random(random_state=quat_rng).as_euler("xyz", degrees=False) # Old Euler init
+    init_quat = R.random(random_state=quat_rng).as_quat() # New Quaternion init
+    init_pos = np.array([init_pos_x, init_pos_y, init_pos_z])
+    init_state = np.concatenate(
+        [init_pos, init_quat] # Create 7D state
+    )
+    init_state = np.array([-0.2, -0.25, -0.3, 0.1, 0, 0, 0])
+    
+    simulator.simulate(
+        np.concatenate([x[0][0], quat[0][0]]),
+        # init_state, # Pass 7D state
+        "ds_policy/data/test_ds_policy.npz",
+        n_steps=300,
+        clf=True,
+        alpha_V=10,
+        lookahead=20,
+    )
     
     # Load and visualize the results
     data = np.load("ds_policy/data/test_ds_policy.npz", allow_pickle=True)

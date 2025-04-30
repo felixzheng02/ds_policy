@@ -1061,11 +1061,11 @@ class DSPolicy:
             self.r_shift = R.identity()
 
             # Truncate last part of the trajectories to avoid unstable dynamics
-            truncate_percent = 0.05
-            for i in range(len(p_in)):
-                keep_points = int((1 - truncate_percent) * len(p_in[i]))
-                p_in[i] = p_in[i][:keep_points]
-                q_in[i] = q_in[i][:keep_points]
+            # truncate_percent = 0.05
+            # for i in range(len(p_in)):
+            #     keep_points = int((1 - truncate_percent) * len(p_in[i]))
+            #     p_in[i] = p_in[i][:keep_points]
+            #     q_in[i] = q_in[i][:keep_points]
 
             K_candidates = config.K_candidates
             self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, K_candidates, visualize=False)
