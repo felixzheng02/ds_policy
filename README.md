@@ -11,6 +11,7 @@ A dynamical system policy for robot control, providing stable and adaptive motio
 - Ability to switch between reference trajectories at runtime
 
 ## Installation
+Make sure the mosek license is up to date
 
 ### From Source
 
