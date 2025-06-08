@@ -299,14 +299,16 @@ class DSPolicy:
             gripper_action = np.zeros(1)
         return np.concatenate([action, gripper_action])
 
-    def resample(self, state: np.ndarray):
+    def resample(self, state: np.ndarray = None):
         if self.se3_lpvds:
             new_pos_att, new_R_att = self.se3_lpvds_attractor_generator.sample()
             self.pos_shift = self.pos_att - new_pos_att
             self.r_shift = self.r_att * new_R_att.inv()
-            self._add_modulation_point(state, radius=0.2)
+            if state is not None:
+                self._add_modulation_point(state, radius=0.2)
         else:
-            self._update_demo_traj_probs(state, "ref_point", 0.8)
+            if state is not None:
+                self._update_demo_traj_probs(state, "ref_point", 0.8)
         return
 
     def _shift_trajs(self, pos_att: np.ndarray, R_att: R):
