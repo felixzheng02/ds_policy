@@ -1224,7 +1224,7 @@ class DSPolicy:
             plt.savefig(save_path)
         plt.close()
 
-    def compute_reconstruction_error(self) -> float:
+    def compute_reconstruction_error(self) -> tuple[float, float]:
         """
         Compute the reconstruction error of the trained model, using the training data.
 
