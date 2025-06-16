@@ -303,7 +303,8 @@ class DSPolicy:
         if self.se3_lpvds:
             new_pos_att, new_R_att = self.se3_lpvds_attractor_generator.sample()
             self.pos_shift = self.pos_att - new_pos_att
-            self.r_shift = self.r_att * new_R_att.inv()
+            print("\033[93mResampled position attractor: {}, current position: {}\033[0m".format(new_pos_att, self.pos_att))
+            # self.r_shift = self.r_att * new_R_att.inv() # rotation resample seems to be not working well
             if state is not None:
                 self._add_modulation_point(state, radius=0.2)
         else:
