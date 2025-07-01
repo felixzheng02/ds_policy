@@ -1220,6 +1220,7 @@ class DSPolicy:
         ax.legend()
 
         if save_path is None:
+            plt.switch_backend("TkAgg")
             plt.show()
         else:
             plt.savefig(save_path)
