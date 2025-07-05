@@ -303,7 +303,8 @@ class DSPolicy:
         if self.se3_lpvds:
             new_pos_att, new_R_att = self.se3_lpvds_attractor_generator.sample()
             self.pos_shift = self.pos_att - new_pos_att
-            self.r_shift = self.r_att * new_R_att.inv()
+            print("\033[93mResampled position attractor: {}, current position: {}\033[0m".format(new_pos_att, self.pos_att))
+            # self.r_shift = self.r_att * new_R_att.inv() # rotation resample seems to be not working well
             if state is not None:
                 self._add_modulation_point(state, radius=0.2)
         else:
@@ -1219,6 +1220,7 @@ class DSPolicy:
         ax.legend()
 
         if save_path is None:
+            plt.switch_backend("TkAgg")
             plt.show()
         else:
             plt.savefig(save_path)
@@ -1252,9 +1254,11 @@ class DSPolicy:
             """
             self.end_pts = end_pts
             self.mode = mode
+            self.one_end_point = False
             if mode == "Gaussian":
                 if len(self.end_pts) == 1:
                     logging.warning("Only one end point provided. Gaussian not fit.")
+                    self.one_end_point = True
                 else:
                     R_mean = R.from_quat([r.as_quat() for _, r in self.end_pts]).mean()
                     self.gaussian = gmm_class(np.array([p for p, _ in self.end_pts]), [r for _, r in self.end_pts], R_mean, K_init=1)
@@ -1268,8 +1272,11 @@ class DSPolicy:
             elif self.mode == "nearest":
                 pass
             elif self.mode == "Gaussian":
-                p, q = self.gaussian.sample()
-                return (p, R.from_quat(q))
+                if self.one_end_point:
+                    return self.end_pts[0]
+                else:
+                    p, q = self.gaussian.sample()
+                    return (p, R.from_quat(q))
             else:
                 raise ValueError(f"Invalid mode: {self.mode}")
 
