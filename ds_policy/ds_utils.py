@@ -1,3 +1,4 @@
+import logging
 import os
 import glob
 import numpy as np
@@ -187,6 +188,11 @@ def compute_vel_traj(pos_traj: np.ndarray, rot_traj: np.ndarray, dt: float):
         translational_vel_traj: np.ndarray, shape (N, 3), translational velocity
         angular_vel_traj: np.ndarray, shape (N, 3), angular velocity
     """
+    if pos_traj.shape[0] == 1:
+        logging.warning("Only one data point, returning zero velocity")
+        translational_vel_traj = np.zeros((1, 3))
+        angular_vel_traj = np.zeros((1, 3))
+        return translational_vel_traj, angular_vel_traj
     quat_traj_scipy = R.from_matrix(rot_traj)
     quat_traj = quat_traj_scipy.as_quat()
 
