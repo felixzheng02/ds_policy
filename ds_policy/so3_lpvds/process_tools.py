@@ -175,6 +175,12 @@ def compute_output(p_list, q_list, t_list):
 
     for l in range(L):
         M       = len(q_list[l])
+        if M == 1:
+            p_out_l = [np.zeros((3))]
+            q_out_l = [q_list[l][0]]
+            p_out.append(np.array(p_out_l))
+            q_out.append(q_out_l)
+            continue
 
         p_out_l  = []
         q_out_l  = []
