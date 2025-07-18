@@ -5,7 +5,6 @@ from scipy.spatial.transform import Rotation as R
 from ds_policy import DSPolicy
 from ds_policy import load_data
 from test_ds_policy import Simulator, Animator
-from ds_policy.ds_utils import euler_to_quat, quat_to_euler
 
 
 class TestRealtimeResample:
@@ -71,7 +70,7 @@ class TestRealtimeResample:
         Args:
             cur_state: Current state (position + euler angles)
         """
-        quat_state = euler_to_quat(cur_state[3:])
+        quat_state = R.from_euler(cur_state[3:]).as_quat()
         self.ds_policy.update_demo_traj_probs(
             state=np.concatenate([cur_state[:3], quat_state]), mode="point", penalty=0.1, traj_threshold=0.1, radius=0.1, angle_threshold=np.pi/2, lookahead=30
         )
@@ -206,7 +205,7 @@ if __name__ == "__main__":
         # Run the resampling test
         test_realtime_resample = TestRealtimeResample(ds_policy)
         demo_traj_probs_history = test_realtime_resample.test(
-            init_state=np.concatenate([x[27][0], quat_to_euler(quat[27][0])]),
+            init_state=np.concatenate([x[27][0], R.from_quat(quat[27][0]).as_euler("xyz", degrees=False)]),
             # init_state=init_state,
             save_dir=save_dir,
             n_steps=n_steps,

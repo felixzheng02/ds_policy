@@ -277,9 +277,13 @@ class DSPolicy:
                 # Use SE3-LPVDS model
                 p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
                 
-                # apply modulations
-                for obj_center, radius in self.modulations:
+                # apply spherical modulations
+                for obj_center, radius in self.spherical_modulations:
                     v = spherical_normal_modulation(p_curr, obj_center, radius, v)
+                
+                # apply ellipsoid modulations
+                for obj_center, axes, rotation_matrix in self.ellipsoid_modulations:
+                    v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix)
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -306,7 +310,7 @@ class DSPolicy:
             print("\033[93mResampled position attractor: {}, current position: {}\033[0m".format(new_pos_att, self.pos_att))
             # self.r_shift = self.r_att * new_R_att.inv() # rotation resample seems to be not working well
             if state is not None:
-                self._add_modulation_point(state, radius=0.2)
+                self._add_spherical_modulation(state, radius=0.2)
         else:
             if state is not None:
                 self._update_demo_traj_probs(state, "ref_point", 0.8)
@@ -326,13 +330,24 @@ class DSPolicy:
 
         return pos_shifted, R_shifted
 
-    def _add_modulation_point(self, state: np.ndarray, radius: float):
+    def _add_spherical_modulation(self, pos: np.ndarray, radius: float):
         """
         Args:
-            state: Current state (x, y, z, qx, qy, qz, qw)
+            pos: Current position (x, y, z)
             radius: Radius of the modulation
         """
-        self.modulations.append((state[:3], radius))
+        self.spherical_modulations.append((pos, radius))
+
+    def _add_ellipsoid_modulation(self, center: np.ndarray, axes: np.ndarray, rotation_matrix: np.ndarray = None):
+        """
+        Args:
+            center: Center position of the ellipsoid (x, y, z)
+            axes: Semi-axes of the ellipsoid [a, b, c]
+            rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid
+        """
+        if rotation_matrix is None:
+            rotation_matrix = np.eye(3)
+        self.ellipsoid_modulations.append((center, axes, rotation_matrix))
 
     def _update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
@@ -1081,7 +1096,8 @@ class DSPolicy:
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
 
-            self.modulations: list[tuple[np.ndarray, float]] = [] # (position, radius)
+            self.spherical_modulations: list[tuple[np.ndarray, float]] = [] # (position, radius)
+            self.ellipsoid_modulations: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = [] # (center, axes, rotation_matrix)
 
     def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_candidates, visualize=False):
         t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
@@ -1314,6 +1330,51 @@ def gamma_spherical(point: np.ndarray, object_center: np.ndarray, radius: float)
 
     return gamma, gradient_gamma
 
+def gamma_ellipsoid(point: np.ndarray, object_center: np.ndarray, axes: np.ndarray, rotation_matrix: np.ndarray = None) -> tuple[float, np.ndarray]:
+    """
+    Calculates the gamma function and its gradient for an ellipsoidal obstacle in 3D.
+
+    Args:
+        point: A 3-element numpy array representing the point [x, y, z].
+        object_center: A 3-element numpy array representing the center [cx, cy, cz] of the ellipsoid.
+        axes: A 3-element numpy array representing the semi-axes [a, b, c] of the ellipsoid.
+        rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid. If None, uses identity (axes-aligned).
+
+    Returns:
+        A tuple containing:
+            - gamma (float): The value of the gamma function for the ellipsoid.
+            - gradient_gamma (np.ndarray): A 3-element numpy array representing the gradient.
+    """
+    # Ensure inputs are numpy arrays
+    point = np.asarray(point)
+    object_center = np.asarray(object_center)
+    axes = np.asarray(axes)
+    
+    if rotation_matrix is None:
+        rotation_matrix = np.eye(3)
+    else:
+        rotation_matrix = np.asarray(rotation_matrix)
+
+    # Transform point to ellipsoid's local coordinate system
+    displacement = point - object_center
+    local_displacement = rotation_matrix.T @ displacement
+
+    # Ellipsoid equation in local coordinates: (x/a)² + (y/b)² + (z/c)² = 1
+    # Gamma function: Γ(point) = (x/a)² + (y/b)² + (z/c)² - 1 + 1 = (x/a)² + (y/b)² + (z/c)²
+    x_local, y_local, z_local = local_displacement[0], local_displacement[1], local_displacement[2]
+    a, b, c = axes[0], axes[1], axes[2]
+    
+    # Gamma function for ellipsoid
+    gamma = (x_local/a)**2 + (y_local/b)**2 + (z_local/c)**2
+
+    # Gradient in local coordinates: ∇Γ_local = [2x/a², 2y/b², 2z/c²]
+    gradient_local = np.array([2*x_local/(a**2), 2*y_local/(b**2), 2*z_local/(c**2)])
+    
+    # Transform gradient back to global coordinates
+    gradient_gamma = rotation_matrix @ gradient_local
+
+    return gamma, gradient_gamma
+
 def normal_modulation(gamma: float, gradient_gamma: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Calculates the modulation matrix for obstacle avoidance in 3D using the normal vector.
@@ -1408,4 +1469,39 @@ def spherical_normal_modulation(points: np.ndarray, object_center: np.ndarray, r
         repulsive_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
         xd_rep = repulsion_gain * repulsive_dir
         v_modulated = xd_rep
+    return v_modulated
+
+def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, axes: np.ndarray, v: np.ndarray, rotation_matrix: np.ndarray = None) -> np.ndarray:
+    """
+    Apply ellipsoidal obstacle avoidance modulation to a velocity vector.
+
+    Args:
+        points: Current position [x, y, z].
+        object_center: Center of the ellipsoidal obstacle [cx, cy, cz].
+        axes: Semi-axes of the ellipsoid [a, b, c].
+        v: Velocity vector to be modulated.
+        rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid.
+
+    Returns:
+        v_modulated: The modulated velocity vector.
+    """
+    gamma, gradient_gamma = gamma_ellipsoid(points, object_center, axes, rotation_matrix)
+    D, E, M = normal_modulation(gamma, gradient_gamma)
+    
+    # Apply modulation to velocity
+    if gamma >= 1:
+        # Outside ellipsoid: apply normal modulation
+        v_modulated = M @ v
+    else:
+        # Inside ellipsoid: apply repulsive force
+        repulsion_gain = 1.0
+        grad_norm = np.linalg.norm(gradient_gamma)
+        if grad_norm > 1e-8:
+            repulsive_dir = gradient_gamma / grad_norm
+            xd_rep = repulsion_gain * repulsive_dir
+            v_modulated = xd_rep
+        else:
+            # Fallback if gradient is zero (at center)
+            v_modulated = v
+    
     return v_modulated
