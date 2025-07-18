@@ -121,6 +121,7 @@ class Animator:
         mode: str = "default",
         attractor_pos: np.ndarray | None = None,
         attractor_quat: np.ndarray | None = None,
+        ellipsoid_modulations: list[tuple[np.ndarray, np.ndarray, np.ndarray]] | None = None,
     ):
         self.traj = traj
         self.demo_trajs = demo_trajs
@@ -143,6 +144,9 @@ class Animator:
         # Use provided attractor pose
         self.attractor_pos = attractor_pos
         self.attractor_quat = attractor_quat
+
+        # Store ellipsoid obstacles to visualize
+        self.ellipsoid_modulations = ellipsoid_modulations
 
     def animate(self, save_path: str = None, interval: int = 100):
         fig = plt.figure(figsize=(12, 12))
@@ -223,6 +227,35 @@ class Animator:
                 )
             )
             self.ref_orientation_label.set_visible(True)
+
+        # Plot ellipsoidal obstacles, if provided
+        if self.ellipsoid_modulations is not None:
+            for idx, (center, axes, rotation) in enumerate(self.ellipsoid_modulations):
+                # Generate ellipsoid mesh
+                u = np.linspace(0, 2 * np.pi, 40)
+                v = np.linspace(0, np.pi, 20)
+                x = axes[0] * np.outer(np.cos(u), np.sin(v))
+                y = axes[1] * np.outer(np.sin(u), np.sin(v))
+                z = axes[2] * np.outer(np.ones_like(u), np.cos(v))
+
+                # Apply rotation (if not identity)
+                if rotation is not None and not np.allclose(rotation, np.eye(3)):
+                    xyz = np.stack((x.flatten(), y.flatten(), z.flatten()), axis=1)
+                    xyz_rot = xyz @ rotation.T
+                    x = xyz_rot[:, 0].reshape(x.shape)
+                    y = xyz_rot[:, 1].reshape(y.shape)
+                    z = xyz_rot[:, 2].reshape(z.shape)
+
+                # Translate to center and plot
+                self.ax.plot_wireframe(
+                    x + center[0],
+                    y + center[1],
+                    z + center[2],
+                    color="gray",
+                    alpha=0.5,
+                    linewidth=0.8,
+                    label="Obstacle" if idx == 0 else None,
+                )
 
         total_frames = len(self.traj) - 1
 
@@ -364,11 +397,7 @@ class Animator:
 
 
 if __name__ == "__main__":
-    option = "OpenDrawer-Op0"
-    x = np.load(f"./trajectory_data/x_{option}.npy", allow_pickle=True)
-    x_dot = np.load(f"./trajectory_data/x_dot_{option}.npy", allow_pickle=True)
-    quat = np.load(f"./trajectory_data/quat_{option}.npy", allow_pickle=True)
-    omega = np.load(f"./trajectory_data/omega_{option}.npy", allow_pickle=True)
+    x, x_dot, quat, omega, gripper = load_data("OpenSingleDoor", "OpenSingleDoor_MoveTowards_option", finger=False, transform_to_object_of_interest_frame=True, debug_on=False)
 
     unified_config = UnifiedModelConfig(
         mode="se3_lpvds",
@@ -386,6 +415,14 @@ if __name__ == "__main__":
         dt=1/60,
         switch=False,
         )
+
+    # ------------------------------------------------------------------
+    # Add an ellipsoidal obstacle modulation to the policy
+    # ------------------------------------------------------------------
+    obstacle_center = np.array([-0.1, -0.17, -0.15])
+    obstacle_axes = np.array([0.1, 0.05, 0.05])
+    obstacle_rotation = np.eye(3)
+    ds_policy.add_ellipsoid_modulation(obstacle_center, obstacle_axes, obstacle_rotation)
     
     simulator = Simulator(ds_policy)
         
@@ -431,5 +468,6 @@ if __name__ == "__main__":
         mode=unified_config.mode,
         attractor_pos=ds_policy.pos_att,
         attractor_quat=ds_policy.r_att.as_quat(),
+        ellipsoid_modulations=ds_policy.ellipsoid_modulations,
     )
     animator.animate(None)

@@ -232,7 +232,7 @@ if __name__ == "__main__":
     ds_policy = DSPolicy(x, x_dot, quat, omega, gripper, unified_config=unified_config, dt=1/60, switch=False, lookahead=5)
     modulation_centor = np.array([0, -0.1, -0.1])
     # ds_policy._add_spherical_modulation(modulation_centor, 0.05)
-    ds_policy._add_ellipsoid_modulation(modulation_centor, [0.1, 0.05, 0.05], np.eye(3))
+    ds_policy.add_ellipsoid_modulation(modulation_centor, [0.1, 0.05, 0.05], np.eye(3))
     pos_to_vel = lambda x: ds_policy.get_action(x)[:3]
     # Plot 3-D vector field
     # plot_position_vector_field(pos_to_vel, x)

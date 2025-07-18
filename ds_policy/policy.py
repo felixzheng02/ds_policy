@@ -315,6 +315,21 @@ class DSPolicy:
             if state is not None:
                 self._update_demo_traj_probs(state, "ref_point", 0.8)
         return
+    
+    def add_ellipsoid_modulation(self, center: np.ndarray, axes: np.ndarray, rotation_matrix: np.ndarray = None):
+        """
+        Args:
+            center: Center position of the ellipsoid (x, y, z)
+            axes: Semi-axes of the ellipsoid [a, b, c]
+            rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid
+        """
+        if rotation_matrix is None:
+            rotation_matrix = np.eye(3)
+        self.ellipsoid_modulations.append((center, axes, rotation_matrix))
+
+    def clear_modulations(self):
+        self.spherical_modulations = []
+        self.ellipsoid_modulations = []
 
     def _shift_trajs(self, pos_att: np.ndarray, R_att: R):
         pos_shifted = []
@@ -337,17 +352,6 @@ class DSPolicy:
             radius: Radius of the modulation
         """
         self.spherical_modulations.append((pos, radius))
-
-    def _add_ellipsoid_modulation(self, center: np.ndarray, axes: np.ndarray, rotation_matrix: np.ndarray = None):
-        """
-        Args:
-            center: Center position of the ellipsoid (x, y, z)
-            axes: Semi-axes of the ellipsoid [a, b, c]
-            rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid
-        """
-        if rotation_matrix is None:
-            rotation_matrix = np.eye(3)
-        self.ellipsoid_modulations.append((center, axes, rotation_matrix))
 
     def _update_demo_traj_probs(
         self, state: np.ndarray, mode: str, penalty: float, traj_threshold: float = 0.1, radius: float = 0.05, angle_threshold: float = np.pi/4, lookahead: int = None
