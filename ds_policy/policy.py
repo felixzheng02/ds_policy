@@ -221,6 +221,7 @@ class DSPolicy:
         alpha_V: float = 20.0,
         lookahead: int = None,
         backtrack: bool = False,
+        wrist_pose: np.ndarray = None,
     ) -> np.ndarray:
         """
         Generate a control action for the given state.
@@ -234,6 +235,7 @@ class DSPolicy:
             alpha_V: CLF convergence rate parameter
             lookahead: Steps to look ahead when selecting reference point (updates self.lookahead if provided)
             backtrack: If True, generate a backtracking action instead of a forward one
+            wrist_pose: Wrist pose [position (3), quaternion (4)]. This is used for modulations. If current state is already inside obstacle ellipsoid, use this info to escape it correctly.
             
         Returns:
             action: Control action [linear velocity (3), angular velocity (3), gripper (1)]
@@ -279,11 +281,11 @@ class DSPolicy:
                 
                 # apply spherical modulations
                 for obj_center, radius in self.spherical_modulations:
-                    v = spherical_normal_modulation(p_curr, obj_center, radius, v)
+                    v = spherical_normal_modulation(p_curr, obj_center, radius, v, wrist_pose)
                 
                 # apply ellipsoid modulations
                 for obj_center, axes, rotation_matrix in self.ellipsoid_modulations:
-                    v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix)
+                    v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix, wrist_pose)
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -1462,20 +1464,41 @@ def normal_modulation(gamma: float, gradient_gamma: np.ndarray) -> tuple[np.ndar
 
     return D, E, M
 
-def spherical_normal_modulation(points: np.ndarray, object_center: np.ndarray, radius: float, v: np.ndarray) -> np.ndarray:
+def spherical_normal_modulation(points: np.ndarray, 
+                                object_center: np.ndarray, 
+                                radius: float, 
+                                v: np.ndarray, 
+                                wrist_pos: Optional[np.ndarray] = None) -> np.ndarray:
+    """
+    Apply spherical obstacle avoidance modulation to a velocity vector.
+
+    Args:
+        points: Current position [x, y, z].
+        object_center: Center of the spherical obstacle [cx, cy, cz].
+        radius: Radius of the spherical obstacle.
+        v: Velocity vector to be modulated.
+        wrist_pos : Optional[3] array. If provided and Γ(points) < 1 (the point is already inside the sphere), the escape direction is taken from the EEF points toward this wrist position so the arm retracts back toward its body.
+    """
     gamma, gradient_gamma = gamma_spherical(points, object_center, radius)
     D, E, M = normal_modulation(gamma, gradient_gamma)
-    # Apply modulation to velocity
+    
     if gamma >= 1:
-        v_modulated = M @ v
-    else:
-        repulsion_gain = 1.0
-        repulsive_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
-        xd_rep = repulsion_gain * repulsive_dir
-        v_modulated = xd_rep
-    return v_modulated
+        return M @ v                                        # outside → normal modulation
 
-def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, axes: np.ndarray, v: np.ndarray, rotation_matrix: np.ndarray = None) -> np.ndarray:
+    # ---------- inside the sphere ----------
+    repulsion_gain = 1.0
+    if wrist_pos is not None:
+        retreat_vec = np.asarray(wrist_pos[:3]) - points
+        if np.linalg.norm(retreat_vec) > 1e-8:
+            retreat_dir = retreat_vec / np.linalg.norm(retreat_vec)
+        else:                                               # degenerate: same point
+            retreat_dir = -gradient_gamma / np.linalg.norm(gradient_gamma)
+    else:                                                   # fallback to gradient
+        retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
+
+    return repulsion_gain * retreat_dir
+
+def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, axes: np.ndarray, v: np.ndarray, rotation_matrix: np.ndarray = None, wrist_pos: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Apply ellipsoidal obstacle avoidance modulation to a velocity vector.
 
@@ -1485,6 +1508,7 @@ def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, a
         axes: Semi-axes of the ellipsoid [a, b, c].
         v: Velocity vector to be modulated.
         rotation_matrix: Optional 3x3 rotation matrix to orient the ellipsoid.
+        wrist_pos : Optional[3] array. If provided and Γ(points) < 1 (the point is already inside the ellipsoid), the escape direction is taken from the EEF points toward this wrist position so the arm retracts back toward its body.
 
     Returns:
         v_modulated: The modulated velocity vector.
@@ -1492,20 +1516,18 @@ def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, a
     gamma, gradient_gamma = gamma_ellipsoid(points, object_center, axes, rotation_matrix)
     D, E, M = normal_modulation(gamma, gradient_gamma)
     
-    # Apply modulation to velocity
     if gamma >= 1:
-        # Outside ellipsoid: apply normal modulation
-        v_modulated = M @ v
-    else:
-        # Inside ellipsoid: apply repulsive force
-        repulsion_gain = 1.0
-        grad_norm = np.linalg.norm(gradient_gamma)
-        if grad_norm > 1e-8:
-            repulsive_dir = gradient_gamma / grad_norm
-            xd_rep = repulsion_gain * repulsive_dir
-            v_modulated = xd_rep
+        return M @ v                                        # outside → normal modulation
+
+    # ---------- inside the ellipsoid ----------
+    repulsion_gain = 100.0
+    if wrist_pos is not None:
+        retreat_vec = np.asarray(wrist_pos[:3]) - points
+        if np.linalg.norm(retreat_vec) > 1e-8:
+            retreat_dir = retreat_vec / np.linalg.norm(retreat_vec)
         else:
-            # Fallback if gradient is zero (at center)
-            v_modulated = v
-    
-    return v_modulated
+            retreat_dir = -gradient_gamma / np.linalg.norm(gradient_gamma)
+    else:
+        retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
+
+    return repulsion_gain * retreat_dir
