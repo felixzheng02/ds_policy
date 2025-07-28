@@ -1261,7 +1261,7 @@ class DSPolicy:
         for i in range(len(self.x)):
             total_pts += len(self.x[i])
             for j in range(len(self.x[i])):
-                action = self.get_action(np.concatenate([self.x[i][j], self.quat[i][j]]), clf=True, alpha_V=20.0, lookahead=5)
+                action = self.get_action(np.concatenate([self.x[i][j], self.quat[i][j]]), clf= False, alpha_V=20.0, lookahead=0)
                 x_dot_pred = action[:3]
                 omega_pred = action[3:6]
                 error += np.linalg.norm(self.x_dot[i][j] - x_dot_pred) + np.linalg.norm(self.omega[i][j] - omega_pred)
