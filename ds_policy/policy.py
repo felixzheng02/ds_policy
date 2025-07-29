@@ -1250,22 +1250,229 @@ class DSPolicy:
 
     def compute_reconstruction_error(self) -> tuple[float, float]:
         """
-        Compute the reconstruction error of the trained model, using the training data.
+        Compute the reconstruction error by integrating forward from initial conditions
+        and comparing with the demonstration trajectories.
 
         Returns:
             error: float, the total reconstruction error
-            avg_error: float, the average reconstruction error
+            avg_error: float, the average reconstruction error per trajectory
         """
-        error = 0
-        total_pts = 0
-        for i in range(len(self.x)):
-            total_pts += len(self.x[i])
-            for j in range(len(self.x[i])):
-                action = self.get_action(np.concatenate([self.x[i][j], self.quat[i][j]]), clf= False, alpha_V=20.0, lookahead=0)
-                x_dot_pred = action[:3]
-                omega_pred = action[3:6]
-                error += np.linalg.norm(self.x_dot[i][j] - x_dot_pred) + np.linalg.norm(self.omega[i][j] - omega_pred)
-        return error, error / total_pts
+        total_error = 0
+        num_trajectories = len(self.x)
+        
+        # Store all reproduced and original trajectories for visualization
+        reproduced_trajectories = []
+        original_trajectories = []
+        
+        for i in range(num_trajectories):
+            # Get initial condition from demonstration
+            x_init = self.x[i][0]
+            quat_init = self.quat[i][0]
+            state_init = np.concatenate([x_init, quat_init])
+            
+            # Integrate forward using the model
+            predicted_traj = self._integrate_trajectory(state_init, len(self.x[i]))
+            
+            # Store trajectories for visualization
+            reproduced_trajectories.append(predicted_traj[0])  # positions
+            original_trajectories.append(self.x[i])  # original positions
+            
+            # Compute error between predicted and demonstrated trajectories
+            traj_error = self._compute_trajectory_error(predicted_traj, i)
+            total_error += traj_error
+            
+        avg_error = total_error / num_trajectories if num_trajectories > 0 else 0
+        
+        # Save trajectory data for visualization
+        self._save_reconstruction_data(reproduced_trajectories, original_trajectories)
+        
+        return total_error, avg_error
+    
+    def _save_reconstruction_data(self, reproduced_trajectories: list[np.ndarray], original_trajectories: list[np.ndarray]):
+        """
+        Save reproduced and original trajectory data for visualization.
+        
+        Args:
+            reproduced_trajectories: List of reproduced trajectory positions
+            original_trajectories: List of original trajectory positions
+        """
+        import os
+        import json
+        
+        # Create directory for saving data
+        save_dir = "reconstruction_data"
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Save trajectory data
+        data = {
+            "reproduced_trajectories": [traj.tolist() for traj in reproduced_trajectories],
+            "original_trajectories": [traj.tolist() for traj in original_trajectories],
+            "num_trajectories": len(reproduced_trajectories),
+            "trajectory_lengths": [len(traj) for traj in reproduced_trajectories]
+        }
+        
+        # Save as JSON for easy loading
+        with open(os.path.join(save_dir, "reconstruction_trajectories.json"), "w") as f:
+            json.dump(data, f, indent=2)
+        
+        # Also save as numpy arrays for direct loading
+        np.savez(
+            os.path.join(save_dir, "reconstruction_trajectories.npz"),
+            reproduced_trajectories=reproduced_trajectories,
+            original_trajectories=original_trajectories,
+            allow_pickle=True
+        )
+        
+        print(f"Reconstruction trajectory data saved to {save_dir}/")
+        
+        # Create a simple visualization script
+        # self._create_visualization_script(save_dir)
+    
+#     def _create_visualization_script(self, save_dir: str):
+#         """
+#         Create a simple visualization script for the reconstruction data.
+        
+#         Args:
+#             save_dir: Directory where data is saved
+#         """
+#         script_content = '''import numpy as np
+# import matplotlib.pyplot as plt
+# from mpl_toolkits.mplot3d import Axes3D
+
+# def visualize_reconstruction():
+#     """Visualize reproduced vs original trajectories."""
+    
+#     # Load data
+#     data = np.load("reconstruction_data/reconstruction_trajectories.npz", allow_pickle=True)
+#     reproduced_trajectories = data["reproduced_trajectories"]
+#     original_trajectories = data["original_trajectories"]
+    
+#     # Create 3D plot
+#     fig = plt.figure(figsize=(15, 10))
+#     ax = fig.add_subplot(111, projection='3d')
+    
+#     # Plot original trajectories in blue
+#     for i, traj in enumerate(original_trajectories):
+#         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
+#                 'b-', alpha=0.7, linewidth=2, label=f'Original {i+1}' if i == 0 else None)
+#         # Mark start and end points
+#         ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], 
+#                   color='green', s=100, marker='o', label='Start' if i == 0 else None)
+#         ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], 
+#                   color='red', s=100, marker='x', label='End' if i == 0 else None)
+    
+#     # Plot reproduced trajectories in red
+#     for i, traj in enumerate(reproduced_trajectories):
+#         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
+#                 'r--', alpha=0.7, linewidth=2, label=f'Reproduced {i+1}' if i == 0 else None)
+    
+#     ax.set_xlabel('X')
+#     ax.set_ylabel('Y')
+#     ax.set_zlabel('Z')
+#     ax.set_title('Reconstruction Results: Original vs Reproduced Trajectories')
+#     ax.legend()
+    
+#     # Set equal aspect ratio
+#     ax.set_box_aspect([1, 1, 1])
+    
+#     plt.tight_layout()
+#     plt.savefig("reconstruction_data/reconstruction_visualization.png", dpi=300, bbox_inches='tight')
+#     plt.show()
+
+# if __name__ == "__main__":
+#     visualize_reconstruction()
+# '''
+        
+#         with open(os.path.join(save_dir, "visualize_reconstruction.py"), "w") as f:
+#             f.write(script_content)
+        
+#         print(f"Visualization script created: {save_dir}/visualize_reconstruction.py")
+#         print("Run 'python reconstruction_data/visualize_reconstruction.py' to visualize the results")
+    
+    def _integrate_trajectory(self, state_init: np.ndarray, num_steps: int) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Integrate the trajectory forward from initial state.
+        
+        Args:
+            state_init: Initial state [position (3), quaternion (4)]
+            num_steps: Number of integration steps
+            
+        Returns:
+            predicted_positions: Array of predicted positions
+            predicted_velocities: Array of predicted velocities
+        """
+        predicted_positions = np.zeros((num_steps, 3))
+        predicted_velocities = np.zeros((num_steps, 3))
+        
+        state = state_init.copy()
+        
+        for step in range(num_steps):
+            # Store current position
+            predicted_positions[step] = state[:3]
+            
+            # Get action from model
+            action = self.get_action(state, clf=False, alpha_V=20.0, lookahead=0)
+            velocity = action[:3]
+            angular_velocity = action[3:6]
+            
+            # Store current velocity
+            predicted_velocities[step] = velocity
+            
+            # Integrate forward using the same method as the Simulator class
+            if step < num_steps - 1:  # Don't integrate on last step
+                # Update position
+                new_pos = state[:3] + velocity * self.dt
+                
+                # Update orientation using quaternion integration
+                current_quat = state[3:]
+                # Ensure quaternion is normalized
+                current_quat /= np.linalg.norm(current_quat)
+                
+                # Convert angular velocity to rotation vector
+                rotation_vector = angular_velocity * self.dt
+                delta_rotation = R.from_rotvec(rotation_vector)
+                
+                # Combine rotations: R_new = delta_R * R_cur
+                # In quaternion terms: q_new = delta_q * q_cur
+                current_rotation = R.from_quat(current_quat)
+                new_rotation = delta_rotation * current_rotation
+                new_quat = new_rotation.as_quat()
+                
+                # Ensure the new quaternion is normalized
+                new_quat /= np.linalg.norm(new_quat)
+                
+                # Update state
+                state = np.concatenate([new_pos, new_quat])
+        
+        return predicted_positions, predicted_velocities
+    
+    def _compute_trajectory_error(self, predicted_traj: tuple[np.ndarray, np.ndarray], demo_idx: int) -> float:
+        """
+        Compute error between predicted and demonstrated trajectories.
+        
+        Args:
+            predicted_traj: Tuple of (predicted_positions, predicted_velocities)
+            demo_idx: Index of the demonstration trajectory
+            
+        Returns:
+            error: Total trajectory error
+        """
+        predicted_positions, predicted_velocities = predicted_traj
+        demo_positions = self.x[demo_idx]
+        demo_velocities = self.x_dot[demo_idx]
+        
+        # Position error (L2 norm of position differences)
+        pos_error = np.mean(np.linalg.norm(predicted_positions - demo_positions, axis=1))
+        
+        # Velocity error (L2 norm of velocity differences)
+        vel_error = np.mean(np.linalg.norm(predicted_velocities - demo_velocities, axis=1))
+        
+        # Combined error (you can adjust weights)
+        pos_weight = 1.0
+        vel_weight = 1.0
+        total_error = pos_weight * pos_error + vel_weight * vel_error
+        
+        return total_error
 
     class SE3LVPDSAttractorGenerator:
         def __init__(self, end_pts: list[tuple[np.ndarray, R]], mode: str):
