@@ -277,7 +277,7 @@ class DSPolicy:
                 return np.concatenate([action_pos, action_ang, gripper_action])
             else:
                 # Use SE3-LPVDS model
-                p_next, q_next, gamma, v, w = self.model.step(p_curr, q_curr, self.dt)
+                p_next, q_next, gamma_pos, gamma_ori, v, w = self.model.step(p_curr, q_curr, self.dt)
                 
                 # apply spherical modulations
                 for obj_center, radius in self.spherical_modulations:
@@ -1123,6 +1123,8 @@ class DSPolicy:
             if reconstruction_error < smallest_reconstruction_error:
                 smallest_reconstruction_error = reconstruction_error
                 self.model = model
+        if self.model is None:
+            raise ValueError("No model was trained successfully")
         print(f"Best K: {K_candidates[i]}")
         if visualize:
             plot_tools.plot_gmm(p_in_roll, self.model.gmm)
