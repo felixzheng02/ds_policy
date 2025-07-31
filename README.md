@@ -21,11 +21,16 @@ conda create -n <env_name> python=3.10.16
 conda activate <env_name>
 
 # Clone the repository
-git clone https://github.com/felixzheng02/ds_policy
+git clone --recurse-submodules https://github.com/felixzheng02/ds_policy
 cd ds_policy
 
 # Install the package
-pip install -e . --no-cache-dir
+pip install -e .
+
+# Compile DAMM submodule
+cd ds_policy/se3_lpvds/src/lpvds/src/damm/build
+cmake ../src
+make
 ```
 
 ## Quick Start
