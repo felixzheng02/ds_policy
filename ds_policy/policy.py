@@ -1127,7 +1127,11 @@ class DSPolicy:
             raise ValueError("No model was trained successfully")
         print(f"Best K: {K_candidates[i]}")
         if visualize:
-            plot_tools.plot_gmm(p_in_roll, self.model.gmm)
+            # plot_tools.plot_gmm(p_in_roll, self.model.gmm)
+            self.visualize_gaussian()
+
+    def visualize_gaussian(self):
+        plot_tools.plot_gmm_pos(self.model.p_in, self.model.pos_ds.damm)
 
     def _validate_model_setup(self):
         """
@@ -1290,6 +1294,99 @@ class DSPolicy:
         
         return total_error, avg_error
     
+    def save_for_visualization(self, filepath, metadata=None):
+        """Save minimal data needed for visualization of Gaussian components.
+        
+        Args:
+            filepath (str): Path to save the visualization data
+            option_name (str, optional): Name/identifier for this model
+        """
+        if self.model is None:
+            raise ValueError("No model available to save. Train a model first.")
+        
+        viz_data = {
+            "model_type": "se3_lpvds",
+            "position_data": {
+                "x": [x_i.tolist() for x_i in self.x],
+                "assignment_arr": self.model.pos_ds.assignment_arr.tolist(),
+                "K": self.model.pos_ds.K,
+                "gaussian_list": [
+                    {
+                        "mu": g["mu"].tolist(),
+                        "sigma": g["sigma"].tolist(),
+                        "prior": g["prior"]
+                    } for g in self.model.pos_ds.damm.gaussian_list
+                ]
+            },
+            "orientation_data": {
+                "K": self.model.quat_ds.K if hasattr(self.model, 'quat_ds') else None,
+                "assignment_arr": (self.model.quat_ds.gmm.assignment_arr.tolist() 
+                                    if hasattr(self.model, 'quat_ds') and hasattr(self.model.quat_ds, 'gmm') else None)
+            },
+            "metadata": metadata
+        }
+        
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else '.', exist_ok=True)
+        
+        with open(filepath, 'w') as f:
+            json.dump(viz_data, f, indent=2)
+        
+        print(f"Visualization data saved to: {filepath}")
+
+    @staticmethod
+    def load_visualization_data(filepath):
+        """Load visualization data from a saved file.
+        
+        Args:
+            filepath (str): Path to the saved visualization data
+            
+        Returns:
+            dict: The loaded visualization data
+        """
+        with open(filepath, 'r') as f:
+            return json.load(f)
+
+    @staticmethod
+    def visualize_saved_gaussians(viz_data, ax: Optional[plt.Axes] = None):
+        """Load and visualize Gaussian components from saved data.
+        
+        Args:
+            viz_data (dict): The loaded visualization data
+            ax (matplotlib 3D axes, optional): If provided, draws on this axes and returns it.
+        """
+        import matplotlib.pyplot as plt
+        from .se3_lpvds.src.util import plot_tools
+        
+        # Extract position data
+        pos_data = viz_data["position_data"]
+        x = pos_data["x"]
+        
+        # Create a mock GMM object with the required attributes
+        class MockGMM:
+            def __init__(self, assignment_arr, K, gaussian_list):
+                self.assignment_arr = np.array(assignment_arr)
+                self.K = K
+                self.gaussian_list = [
+                    {
+                        "mu": np.array(g["mu"]),
+                        "sigma": np.array(g["sigma"]),
+                        "prior": g["prior"]
+                    } for g in gaussian_list
+                ]
+        
+        mock_gmm = MockGMM(
+            pos_data["assignment_arr"],
+            pos_data["K"],
+            pos_data["gaussian_list"]
+        )
+        
+        # Visualize on provided axes if available
+        plot_tools.plot_gmm_pos(x, mock_gmm, ax=ax)
+        if ax is not None:
+            return viz_data, ax
+        return viz_data
+    
     def _save_reconstruction_data(self, reproduced_trajectories: list[np.ndarray], original_trajectories: list[np.ndarray]):
         """
         Save reproduced and original trajectory data for visualization.
@@ -1328,68 +1425,68 @@ class DSPolicy:
         print(f"Reconstruction trajectory data saved to {save_dir}/")
         
         # Create a simple visualization script
-        # self._create_visualization_script(save_dir)
+        self._create_visualization_script(save_dir)
     
-#     def _create_visualization_script(self, save_dir: str):
-#         """
-#         Create a simple visualization script for the reconstruction data.
+    def _create_visualization_script(self, save_dir: str):
+        """
+        Create a simple visualization script for the reconstruction data.
         
-#         Args:
-#             save_dir: Directory where data is saved
-#         """
-#         script_content = '''import numpy as np
-# import matplotlib.pyplot as plt
-# from mpl_toolkits.mplot3d import Axes3D
+        Args:
+            save_dir: Directory where data is saved
+        """
+        script_content = '''import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
-# def visualize_reconstruction():
-#     """Visualize reproduced vs original trajectories."""
+def visualize_reconstruction():
+    """Visualize reproduced vs original trajectories."""
     
-#     # Load data
-#     data = np.load("reconstruction_data/reconstruction_trajectories.npz", allow_pickle=True)
-#     reproduced_trajectories = data["reproduced_trajectories"]
-#     original_trajectories = data["original_trajectories"]
+    # Load data
+    data = np.load("reconstruction_data/reconstruction_trajectories.npz", allow_pickle=True)
+    reproduced_trajectories = data["reproduced_trajectories"]
+    original_trajectories = data["original_trajectories"]
     
-#     # Create 3D plot
-#     fig = plt.figure(figsize=(15, 10))
-#     ax = fig.add_subplot(111, projection='3d')
+    # Create 3D plot
+    fig = plt.figure(figsize=(15, 10))
+    ax = fig.add_subplot(111, projection='3d')
     
-#     # Plot original trajectories in blue
-#     for i, traj in enumerate(original_trajectories):
-#         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
-#                 'b-', alpha=0.7, linewidth=2, label=f'Original {i+1}' if i == 0 else None)
-#         # Mark start and end points
-#         ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], 
-#                   color='green', s=100, marker='o', label='Start' if i == 0 else None)
-#         ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], 
-#                   color='red', s=100, marker='x', label='End' if i == 0 else None)
+    # Plot original trajectories in blue
+    for i, traj in enumerate(original_trajectories):
+        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
+                'b-', alpha=0.7, linewidth=2, label=f'Original {i+1}' if i == 0 else None)
+        # Mark start and end points
+        ax.scatter(traj[0, 0], traj[0, 1], traj[0, 2], 
+                  color='green', s=100, marker='o', label='Start' if i == 0 else None)
+        ax.scatter(traj[-1, 0], traj[-1, 1], traj[-1, 2], 
+                  color='red', s=100, marker='x', label='End' if i == 0 else None)
     
-#     # Plot reproduced trajectories in red
-#     for i, traj in enumerate(reproduced_trajectories):
-#         ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
-#                 'r--', alpha=0.7, linewidth=2, label=f'Reproduced {i+1}' if i == 0 else None)
+    # Plot reproduced trajectories in red
+    for i, traj in enumerate(reproduced_trajectories):
+        ax.plot(traj[:, 0], traj[:, 1], traj[:, 2], 
+                'r--', alpha=0.7, linewidth=2, label=f'Reproduced {i+1}' if i == 0 else None)
     
-#     ax.set_xlabel('X')
-#     ax.set_ylabel('Y')
-#     ax.set_zlabel('Z')
-#     ax.set_title('Reconstruction Results: Original vs Reproduced Trajectories')
-#     ax.legend()
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title('Reconstruction Results: Original vs Reproduced Trajectories')
+    ax.legend()
     
-#     # Set equal aspect ratio
-#     ax.set_box_aspect([1, 1, 1])
+    # Set equal aspect ratio
+    ax.set_box_aspect([1, 1, 1])
     
-#     plt.tight_layout()
-#     plt.savefig("reconstruction_data/reconstruction_visualization.png", dpi=300, bbox_inches='tight')
-#     plt.show()
+    plt.tight_layout()
+    plt.savefig("reconstruction_data/reconstruction_visualization.png", dpi=300, bbox_inches='tight')
+    plt.show()
 
-# if __name__ == "__main__":
-#     visualize_reconstruction()
-# '''
+if __name__ == "__main__":
+    visualize_reconstruction()
+'''
         
-#         with open(os.path.join(save_dir, "visualize_reconstruction.py"), "w") as f:
-#             f.write(script_content)
+        with open(os.path.join(save_dir, "visualize_reconstruction.py"), "w") as f:
+            f.write(script_content)
         
-#         print(f"Visualization script created: {save_dir}/visualize_reconstruction.py")
-#         print("Run 'python reconstruction_data/visualize_reconstruction.py' to visualize the results")
+        print(f"Visualization script created: {save_dir}/visualize_reconstruction.py")
+        print("Run 'python reconstruction_data/visualize_reconstruction.py' to visualize the results")
     
     def _integrate_trajectory(self, state_init: np.ndarray, num_steps: int) -> tuple[np.ndarray, np.ndarray]:
         """

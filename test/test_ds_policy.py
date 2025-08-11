@@ -401,7 +401,7 @@ if __name__ == "__main__":
 
     unified_config = UnifiedModelConfig(
         mode="se3_lpvds",
-        K_candidates=[3],
+        K_candidates=[1],
         enable_simple_ds_near_target=True,
     )
 
