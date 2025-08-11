@@ -102,6 +102,7 @@ class UnifiedModelConfig:
     enable_simple_ds_near_target: bool = False
     simple_ds_pos_threshold: float = 0.05
     simple_ds_ori_threshold: float = 0.1
+    simple_ds_attractor: Optional[np.ndarray] = None
     K_pos: float = 1.0
     K_ori: float = 1.0
 
@@ -139,6 +140,7 @@ class DSPolicy:
         demo_traj_probs: np.ndarray = None,
         backtrack_steps: int = 0,
         relative_cluster_attractor: np.ndarray = None,
+        simple_ds_attractor: np.ndarray = None,
         **kwargs
     ):
         """
@@ -195,6 +197,7 @@ class DSPolicy:
         self.se3_lpvds = False
 
         self.relative_cluster_attractor = relative_cluster_attractor
+        self.simple_ds_attractor = simple_ds_attractor
 
         # Process data for quat model
         (
@@ -266,9 +269,11 @@ class DSPolicy:
             ori_angle = np.linalg.norm(q_err.as_rotvec())
 
             if self.enable_simple_ds_near_target and pos_dist < self.simple_ds_pos_threshold and ori_angle < self.simple_ds_ori_threshold:
-                # Use PD controller
-                p_error = self.pos_att - p_curr
-                ori_error_vec = q_err.as_rotvec()
+                # Use PD controller with simple DS attractor
+                p_error = self.simple_ds_pos_att - p_curr
+                q_err_simple = self.simple_ds_r_att * q_curr.inv()
+                ori_error_vec = q_err_simple.as_rotvec()
+
 
                 action_pos = self.K_pos * p_error 
                 action_ang = self.K_ori * ori_error_vec
@@ -1101,6 +1106,12 @@ class DSPolicy:
                 self.simple_ds_ori_threshold = config.simple_ds_ori_threshold
                 self.K_pos = config.K_pos
                 self.K_ori = config.K_ori
+                if self.simple_ds_attractor is not None:    
+                    self.simple_ds_pos_att = self.simple_ds_attractor[:3]
+                    self.simple_ds_r_att = R.from_quat(self.simple_ds_attractor[3:])
+                else:
+                    self.simple_ds_pos_att = self.pos_att
+                    self.simple_ds_r_att = self.r_att
 
             self.spherical_modulations: list[tuple[np.ndarray, float]] = [] # (position, radius)
             self.ellipsoid_modulations: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = [] # (center, axes, rotation_matrix)
