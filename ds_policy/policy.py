@@ -270,8 +270,8 @@ class DSPolicy:
 
             if self.enable_simple_ds_near_target and pos_dist < self.simple_ds_pos_threshold and ori_angle < self.simple_ds_ori_threshold:
                 # Use PD controller with simple DS attractor
-                p_error = self.simple_ds_pos_att - p_curr
-                q_err_simple = self.simple_ds_r_att * q_curr.inv()
+                p_error = self.pos_att - p_curr
+                q_err_simple = self.r_att * q_curr.inv()
                 ori_error_vec = q_err_simple.as_rotvec()
 
 
