@@ -1823,7 +1823,7 @@ def spherical_normal_modulation(points: np.ndarray,
         if np.linalg.norm(retreat_vec) > 1e-8:
             retreat_dir = retreat_vec / np.linalg.norm(retreat_vec)
         else:                                               # degenerate: same point
-            retreat_dir = -gradient_gamma / np.linalg.norm(gradient_gamma)
+            retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
     else:                                                   # fallback to gradient
         retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
 
@@ -1851,14 +1851,17 @@ def ellipsoid_normal_modulation(points: np.ndarray, object_center: np.ndarray, a
         return M @ v                                        # outside → normal modulation
 
     # ---------- inside the ellipsoid ----------
-    repulsion_gain = 100.0
+    repulsion_gain = 3.0
     if wrist_pos is not None:
         retreat_vec = np.asarray(wrist_pos[:3]) - points
         if np.linalg.norm(retreat_vec) > 1e-8:
+            print("wrist pos used")
             retreat_dir = retreat_vec / np.linalg.norm(retreat_vec)
         else:
-            retreat_dir = -gradient_gamma / np.linalg.norm(gradient_gamma)
+            print("wrist dir too small  fallback to gradient")
+            retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
     else:
+        print("no wrist pos fallback to gradient")
         retreat_dir = gradient_gamma / np.linalg.norm(gradient_gamma)
 
     return repulsion_gain * retreat_dir
