@@ -168,6 +168,20 @@ class DSPolicy:
         if unified_config is None and (pos_config is None or quat_config is None):
             raise ValueError("Must provide either unified_config or both pos_config and quat_config")
 
+        invalid_indexes = []
+        for i in range(len(x)):
+            if np.all(x_dot[i] == 0) and np.all(omega[i] == 0):
+                print(f"Skipping trajectory {i} because it is constant")
+                invalid_indexes.append(i)
+        if len(invalid_indexes) == len(x):
+            raise ValueError("All trajectories are constant, cannot train SE3-LPVDS model")
+        x = [x[i] for i in range(len(x)) if i not in invalid_indexes]
+        x_dot = [x_dot[i] for i in range(len(x_dot)) if i not in invalid_indexes]
+        quat = [quat[i] for i in range(len(quat)) if i not in invalid_indexes]
+        omega = [omega[i] for i in range(len(omega)) if i not in invalid_indexes]
+        if len(gripper) > 0:
+            gripper = [gripper[i] for i in range(len(gripper)) if i not in invalid_indexes]
+
         self.dt = dt
         self.x = x
         self.x_dot = x_dot
