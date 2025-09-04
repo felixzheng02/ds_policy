@@ -295,8 +295,13 @@ class DSPolicy:
                 gripper_action = np.zeros(1) # Assuming open/close is handled elsewhere when near target
                 return np.concatenate([action_pos, action_ang, gripper_action])
             else:
-                # Use SE3-LPVDS model
                 p_next, q_next, gamma_pos, gamma_ori, v, w = self.model.step(p_curr, q_curr, self.dt)
+                q_err_simple = self.simple_ds_r_att * q_curr.inv()
+                ori_error_vec = q_err_simple.as_rotvec()
+                action_ang = self.K_ori * ori_error_vec
+
+
+                # Use SE3-LPVDS model
                 
                 # apply spherical modulations
                 for obj_center, radius in self.spherical_modulations:
@@ -306,7 +311,7 @@ class DSPolicy:
                 for obj_center, axes, rotation_matrix in self.ellipsoid_modulations:
                     v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix, wrist_pose)
                 action_pos = v.flatten()
-                action_ang = w.flatten()
+                # action_ang = w.flatten()
                 gripper_action = np.zeros(1)
                 return np.concatenate([action_pos, action_ang, gripper_action])
 
