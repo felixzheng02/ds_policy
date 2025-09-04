@@ -179,15 +179,15 @@ class DSPolicy:
         x_dot = [x_dot[i] for i in range(len(x_dot)) if i not in invalid_indexes]
         quat = [quat[i] for i in range(len(quat)) if i not in invalid_indexes]
         omega = [omega[i] for i in range(len(omega)) if i not in invalid_indexes]
-        if len(gripper) > 0:
-            gripper = [gripper[i] for i in range(len(gripper)) if i not in invalid_indexes]
+        # if len(gripper) > 0:
+        #     gripper = [gripper[i] for i in range(len(gripper)) if i not in invalid_indexes]
 
         self.dt = dt
         self.x = x
         self.x_dot = x_dot
         self.quat = quat
         self.omega = omega
-        self.gripper = gripper
+        # self.gripper = gripper
         self.switch = switch
         self.lookahead = lookahead
         self.backtrack_steps = backtrack_steps
@@ -318,10 +318,10 @@ class DSPolicy:
             action = self._apply_clf(state, action_raw, alpha_V)
         else:
             action = action_raw
-        if len(self.gripper) > 0:
-            gripper_action = self.gripper[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
-        else:
-            gripper_action = np.zeros(1)
+        # if len(self.gripper) > 0:
+        #     gripper_action = self.gripper[self.ref_traj_idx][self.ref_point_idx_no_lookahead]
+        # else:
+        #     gripper_action = np.zeros(1)
         return np.concatenate([action, gripper_action])
 
     def resample(self, state: np.ndarray = None):
