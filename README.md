@@ -26,7 +26,10 @@ apt install python3-vcstool
 git clone https://github.com/felixzheng02/ds_policy
 cd ds_policy/ds_policy
 vcs import < ../dependency.yaml
-cd ds_policy
+cd se3_lpvds/src
+vcs import < dependency.yaml
+cd lpvds/src
+vcs import < dependency.yaml
 
 
 
