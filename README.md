@@ -20,9 +20,15 @@ Make sure the mosek license is up to date
 conda create -n <env_name> python=3.10.16
 conda activate <env_name>
 
+apt install python3-vcstool
+
 # Clone the repository
-git clone --recurse-submodules https://github.com/felixzheng02/ds_policy
+git clone https://github.com/felixzheng02/ds_policy
+cd ds_policy/ds_policy
+vcs import < ../dependency.yaml
 cd ds_policy
+
+
 
 # Install the package
 pip install -e .

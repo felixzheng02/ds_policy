@@ -3,6 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# depends
+ds_policy/se3_lpvds/
+
 # C extensions
 *.so
 
