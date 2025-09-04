@@ -1,4 +1,0 @@
-[submodule "ds_policy/se3_lpvds"]
-	path = ds_policy/se3_lpvds
-	url = https://github.com/felixzheng02/se3_lpvds.git
-	branch = main-decoupled
