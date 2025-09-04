@@ -1,0 +1,5 @@
+repositories:
+  se3_lpvds:
+    type: git
+    url: https://github.com/sunan-sun/se3_lpvds.git
+    version: main-decoupled
