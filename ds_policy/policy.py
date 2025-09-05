@@ -1096,8 +1096,9 @@ class DSPolicy:
             # p_att, q_att = self.se3_lpvds_attractor_generator.sample()
             # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
             # p_in = process_tools._smooth_pos(p_in)
+            augment_factor= 12
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
-            p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, shift=False, opt="savgol")
+            p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, augment_factor=augment_factor, shift=False, opt="savgol")
 
             if self.relative_cluster_attractor is not None:
                 p_att = self.relative_cluster_attractor[0:3]
@@ -1119,7 +1120,7 @@ class DSPolicy:
             #     q_in[i] = q_in[i][:keep_points]
 
             K_candidates = config.K_candidates
-            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt, K_candidates, visualize=False)
+            self.train_se3_lpvds(p_in, q_in, p_att, q_att, self.dt/augment_factor, K_candidates, visualize=False)
 
             # Store PD parameters from config
             self.enable_simple_ds_near_target = config.enable_simple_ds_near_target
