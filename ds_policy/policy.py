@@ -1098,7 +1098,7 @@ class DSPolicy:
             # p_in = process_tools._smooth_pos(p_in)
             augment_factor= 8
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
-            p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, augment_factor=augment_factor, shift=False, opt="savgol")
+            p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, augment_factor=augment_factor, shift=True, opt="savgol")
 
             if self.relative_cluster_attractor is not None:
                 p_att = self.relative_cluster_attractor[0:3]
