@@ -1096,7 +1096,7 @@ class DSPolicy:
             # p_att, q_att = self.se3_lpvds_attractor_generator.sample()
             # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
             # p_in = process_tools._smooth_pos(p_in)
-            augment_factor= 12
+            augment_factor= 8
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
             p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, augment_factor=augment_factor, shift=False, opt="savgol")
 
