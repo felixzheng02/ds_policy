@@ -1097,11 +1097,14 @@ class DSPolicy:
             # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
             # p_in = process_tools._smooth_pos(p_in)
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
-            p_in, q_in, t_raw, p_att, q_att = process_tools.pre_process(p_raw, q_raw, t_raw, shift=False, opt="savgol")
+            p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, shift=False, opt="savgol")
 
             if self.relative_cluster_attractor is not None:
                 p_att = self.relative_cluster_attractor[0:3]
                 q_att = R.from_quat(self.relative_cluster_attractor[3:])
+
+            # Plot p_raw on top of p_in for comparison
+            self._plot_trajectory_comparison(p_raw, p_in)
 
             self.pos_att: np.ndarray = p_att
             self.r_att: R = q_att
@@ -1283,6 +1286,50 @@ class DSPolicy:
         else:
             plt.savefig(save_path)
         plt.close()
+
+    def _plot_trajectory_comparison(self, p_raw, p_in):
+        """
+        Plot p_raw trajectories on top of p_in trajectories and save as op{n}.png files.
+        
+        Args:
+            p_raw: List of raw position trajectories (list of np.ndarray)
+            p_in: List of processed position trajectories (list of np.ndarray)
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        # Create a single figure with all trajectories
+        fig = plt.figure(figsize=(12, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot each trajectory pair
+        for i, (traj_raw, traj_in) in enumerate(zip(p_raw, p_in)):
+            # Plot processed trajectory (p_in) as scatter points
+            ax.scatter(traj_in[:, 0], traj_in[:, 1], traj_in[:, 2], 
+                      label=f'p_in_{i} ({len(traj_in)} pts)', s=20, alpha=0.8)
+            
+            # Plot raw trajectory (p_raw) as scatter points on top
+            ax.scatter(traj_raw[:, 0], traj_raw[:, 1], traj_raw[:, 2], 
+                      label=f'p_raw_{i} ({len(traj_raw)} pts)', s=20, alpha=0.8, marker='x')
+            
+            # Mark start and end points with larger markers
+            ax.scatter(traj_raw[0, 0], traj_raw[0, 1], traj_raw[0, 2], 
+                      marker='o', s=100, alpha=1.0, color='green')
+            ax.scatter(traj_raw[-1, 0], traj_raw[-1, 1], traj_raw[-1, 2], 
+                      marker='s', s=100, alpha=1.0, color='red')
+        
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position') 
+        ax.set_zlabel('Z Position')
+        ax.set_title('Trajectory Comparison: p_raw vs p_in')
+        ax.legend()
+        
+        # Save the plot
+        filename = f'op{len(p_raw)}.png'
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Trajectory comparison plot saved as {filename}")
 
     def compute_reconstruction_error(self) -> tuple[float, float]:
         """
