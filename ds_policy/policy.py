@@ -1096,13 +1096,18 @@ class DSPolicy:
             # p_att, q_att = self.se3_lpvds_attractor_generator.sample()
             # p_in, q_in = self._shift_trajs(p_att, q_att) # same length as self.x, self.quat, but shifted by attractor
             # p_in = process_tools._smooth_pos(p_in)
-            augment_factor= 8
+            augment_factor = 12
             t_raw = [np.linspace(0, len(p_traj) * self.dt, len(p_traj)) for p_traj in p_raw]
             p_in, q_in, t_raw, p_att, q_att = process_tools.preprocess_with_augmentation(p_raw, q_raw, t_raw, augment_factor=augment_factor, shift=True, opt="savgol")
+            
+            # Print endpoint attractor values from preprocessing
+            print(f"[DS_POLICY] Endpoint attractor from preprocess_with_augmentation:")
+            print(f"[DS_POLICY] p_att: {p_att}")
+            print(f"[DS_POLICY] q_att: {q_att.as_quat()}")
 
             if self.relative_cluster_attractor is not None:
-                p_att = self.relative_cluster_attractor[0:3]
-                q_att = R.from_quat(self.relative_cluster_attractor[3:])
+                assert np.allclose(p_att, self.relative_cluster_attractor[0:3])
+                assert np.allclose(q_att.as_quat(), self.relative_cluster_attractor[3:])
 
             # Plot p_raw on top of p_in for comparison
             self._plot_trajectory_comparison(p_raw, p_in)
@@ -1325,8 +1330,18 @@ class DSPolicy:
         ax.set_title('Trajectory Comparison: p_raw vs p_in')
         ax.legend()
         
+        # Find the next available filename by checking existing files
+        base_dir = './feature_data'
+        # os.makedirs(base_dir, exist_ok=True)
+        
+        counter = 1
+        while True:
+            filename = os.path.join(base_dir, f'op{counter}_data_process.png')
+            if not os.path.exists(filename):
+                break
+            counter += 1
+        
         # Save the plot
-        filename = f'op{len(p_raw)}.png'
         plt.savefig(filename, dpi=300, bbox_inches='tight')
         plt.close()
         
