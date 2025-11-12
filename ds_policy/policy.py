@@ -108,7 +108,8 @@ class UnifiedModelConfig:
 
     # Resampling parameters
     attractor_resampling_mode: str = "Gaussian" # This determines how to resample the attractor. Could be "random", "nearest", "Gaussian"
-    
+    # attractor_resampling_mode: str = "mean" # This determines how to resample the attractor. Could be "random", "nearest", "Gaussian"
+
     # def __post_init__(self):
     #     if self.load_path is None and self.save_path is None:
     #         raise ValueError(f"For {self.mode} mode, either load_path or save_path must be provided")
@@ -307,9 +308,9 @@ class DSPolicy:
                 # for obj_center, radius in self.spherical_modulations:
                 #     v = spherical_normal_modulation(p_curr, obj_center, radius, v, wrist_pose)
                 
-                # # apply ellipsoid modulations
-                # for obj_center, axes, rotation_matrix in self.ellipsoid_modulations:
-                #     v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix, wrist_pose)
+                # apply ellipsoid modulations
+                for obj_center, axes, rotation_matrix in self.ellipsoid_modulations:
+                    v = ellipsoid_normal_modulation(p_curr, obj_center, axes, v, rotation_matrix, wrist_pose)
                 action_pos = v.flatten()
                 action_ang = w.flatten()
                 gripper_action = np.zeros(1)
@@ -1661,7 +1662,7 @@ if __name__ == "__main__":
             self.end_pts = end_pts
             self.mode = mode
             self.one_end_point = False
-            if mode == "Gaussian":
+            if mode == "Gaussian" or mode == "mean":
                 if len(self.end_pts) == 1:
                     logging.warning("Only one end point provided. Gaussian not fit.")
                     self.one_end_point = True
@@ -1683,6 +1684,9 @@ if __name__ == "__main__":
                 else:
                     p, q = self.gaussian.sample()
                     return (p, R.from_quat(q))
+            elif self.mode == "mean":
+                p, q = self.gaussian.mean()
+                return (p, R.from_quat(q))
             else:
                 raise ValueError(f"Invalid mode: {self.mode}")
 
