@@ -24,6 +24,8 @@ from .so3_lpvds.process_tools import (
 )
 from .se3_lpvds.src.se3_class import se3_class
 from .se3_lpvds.src.gmm_class import gmm_class
+# from .se3_lpvds.src.quaternion_ds.src.gmm_class import gmm_class
+
 from .se3_lpvds.src.util import process_tools, plot_tools
 
 qp = OSQP()
@@ -1146,6 +1148,7 @@ class DSPolicy:
 
     def train_se3_lpvds(self, p_in, q_in, p_att, q_att, dt, K_candidates, visualize=False):
         t_in = [[j*dt for j in range(len(p_in[i]))] for i in range(len(p_in))] # list of list of float
+        T = t_in[-1][-1] - t_in[-1][0]
         p_out, q_out = process_tools.compute_output(p_in, q_in, t_in)
         p_in_roll, q_in_roll, p_out_roll, q_out_roll = process_tools.rollout_list(p_in, q_in, p_out, q_out) # Use rolled versions
         smallest_reconstruction_error = float('inf')
@@ -1155,13 +1158,28 @@ class DSPolicy:
             model = se3_class(p_in_roll, q_in_roll, p_out_roll, q_out_roll, p_att, q_att, dt, K)  
             try:
                 model.begin()
+                p_test_list = []
+                q_test_list = []
+                p_test, q_test, gamma_pos, gamma_ori, v_test, w_test = model.sim(p_in_roll[0,:], q_in_roll[0], p_att, q_att, step_size=dt, duration=T)
+                p_test_list.append(p_test)
+                from .se3_lpvds.src.lpvds.src.damm.src.util.plot_tools import plot_gmm
+                plot_gmm(p_in_roll, model.pos_ds.damm.z, model.pos_ds.damm)
+
+                from .se3_lpvds.src.lpvds.src.util.plot_tools import plot_ds, plot_gamma
+                plot_ds(p_in_roll, p_test_list, model.pos_ds)
+                # plot_gamma(gamma_pos, title="pos")
+                # plot_gamma(gamma_ori, title="ori")
+
+                # from se3_lpvds.src.util import plot_tools
+                # plot_tools.plot_result(p_in_roll, p_test, q_test)
+
             except Exception as e:
                 print(f"Omitting K={K} due to error: {e}")
                 continue
-            reconstruction_error = model.compute_reconstruction_error() # TODO
-            if reconstruction_error < smallest_reconstruction_error:
-                smallest_reconstruction_error = reconstruction_error
-                self.model = model
+            # reconstruction_error = model.compute_reconstruction_error() # TODO
+            # if reconstruction_error < smallest_reconstruction_error:
+            #     smallest_reconstruction_error = reconstruction_error
+            self.model = model
         if self.model is None:
             raise ValueError("No model was trained successfully")
         print(f"Best K: {K_candidates[i]}")
