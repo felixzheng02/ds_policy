@@ -26,21 +26,12 @@ apt install python3-vcstool
 git clone https://github.com/felixzheng02/ds_policy
 cd ds_policy/ds_policy
 vcs import < ../dependency.yaml
-cd se3_lpvds/src
+cd se3_lpvds
 vcs import < dependency.yaml
-cd lpvds/src
-vcs import < dependency.yaml
-
 
 
 # Install the package
 pip install -e .
-
-# Compile DAMM submodule
-cd ds_policy/se3_lpvds/src/lpvds/src/damm/build
-cmake ../src
-make
-```
 
 ## Quick Start
 
