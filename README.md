@@ -20,7 +20,7 @@ Make sure the mosek license is up to date
 conda create -n <env_name> python=3.10.16
 conda activate <env_name>
 
-apt install python3-vcstool
+apt install python3-vcstool # for newer ubuntu, use pip3 install vcstool
 
 # Clone the repository
 git clone https://github.com/felixzheng02/ds_policy
@@ -30,7 +30,7 @@ cd se3_lpvds
 vcs import < dependency.yaml
 
 
-# Install the package
+# Install the package (first cd to ds_policy folder)
 pip install -e .
 
 ## Quick Start
